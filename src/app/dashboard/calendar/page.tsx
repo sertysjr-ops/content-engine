@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   addMonths,
   eachDayOfInterval,
@@ -10,30 +10,22 @@ import {
   isSameDay,
   isSameMonth,
   isToday,
+  parseISO,
   startOfMonth,
   startOfWeek,
 } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 type ScheduledPost = {
-  id: number;
+  id: string;
   title: string;
   platform: string;
   date: Date;
   status: "scheduled" | "draft" | "published";
 };
-
-const scheduledPosts: ScheduledPost[] = [
-  { id: 1, title: "10 AI tools thread", platform: "Twitter", date: new Date(2026, 5, 12, 10, 0), status: "published" },
-  { id: 2, title: "$10K MRR case study", platform: "LinkedIn", date: new Date(2026, 5, 15, 9, 0), status: "published" },
-  { id: 3, title: "No-code future post", platform: "Blog", date: new Date(2026, 5, 18, 14, 0), status: "scheduled" },
-  { id: 4, title: "Launch teaser", platform: "Twitter", date: new Date(2026, 5, 21, 12, 0), status: "scheduled" },
-  { id: 5, title: "Behind the build vlog", platform: "YouTube", date: new Date(2026, 5, 24, 17, 0), status: "draft" },
-  { id: 6, title: "Weekly wins #4", platform: "Twitter", date: new Date(2026, 5, 27, 10, 0), status: "scheduled" },
-];
 
 const statusVariant = {
   published: "default",
@@ -42,7 +34,33 @@ const statusVariant = {
 } as const;
 
 export default function CalendarPage() {
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 5, 1));
+  const [currentMonth, setCurrentMonth] = useState(
+    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  );
+  const [posts, setPosts] = useState<ScheduledPost[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/posts");
+        const data = await res.json();
+        setPosts(
+          (data.posts ?? [])
+            .filter((p: { scheduledAt: string | null }) => p.scheduledAt)
+            .map((p: { id: string; title: string; platform: string; scheduledAt: string; status: ScheduledPost["status"] }) => ({
+              id: p.id,
+              title: p.title,
+              platform: p.platform,
+              date: parseISO(p.scheduledAt),
+              status: p.status,
+            }))
+        );
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 });
@@ -79,12 +97,12 @@ export default function CalendarPage() {
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <Button className="ml-2 bg-gradient-to-r from-violet-500 to-fuchsia-600 hover:from-violet-600 hover:to-fuchsia-700">
-            <Plus className="mr-2 h-4 w-4" />
-            New post
-          </Button>
         </div>
       </div>
+
+      {loading && (
+        <p className="text-sm text-muted-foreground">Loading schedule…</p>
+      )}
 
       <Card>
         <CardContent className="p-4">
@@ -102,9 +120,7 @@ export default function CalendarPage() {
           {/* Days grid */}
           <div className="grid grid-cols-7 gap-1">
             {days.map((day) => {
-              const dayPosts = scheduledPosts.filter((p) =>
-                isSameDay(p.date, day)
-              );
+              const dayPosts = posts.filter((p) => isSameDay(p.date, day));
               const inMonth = isSameMonth(day, currentMonth);
               return (
                 <div

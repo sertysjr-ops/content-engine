@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { format, parseISO } from "date-fns";
 import {
   BarChart3,
   Calendar,
@@ -12,41 +14,50 @@ import {
   Zap,
 } from "lucide-react";
 
-const stats = [
-  { title: "Total Posts", value: "124", change: "+12%", icon: FileText },
-  { title: "Scheduled", value: "23", change: "+5", icon: Calendar },
-  { title: "Engagement", value: "8.4%", change: "+2.1%", icon: TrendingUp },
-  { title: "AI Generated", value: "89", change: "+34", icon: Zap },
-];
+type Stats = {
+  total: number;
+  draft: number;
+  scheduled: number;
+  published: number;
+  aiGenerated: number;
+  scheduledUpcoming: number;
+};
 
-const recentPosts = [
-  {
-    id: 1,
-    title: "10 AI Tools That Will 10x Your Productivity",
-    platform: "Twitter",
-    status: "published",
-    date: "2h ago",
-    engagement: "1.2k",
-  },
-  {
-    id: 2,
-    title: "How I Built a $10K MRR SaaS in 30 Days",
-    platform: "LinkedIn",
-    status: "scheduled",
-    date: "Tomorrow",
-    engagement: "—",
-  },
-  {
-    id: 3,
-    title: "The Future of No-Code Development",
-    platform: "Blog",
-    status: "draft",
-    date: "Just now",
-    engagement: "—",
-  },
-];
+type Post = {
+  id: string;
+  title: string;
+  platform: string;
+  status: "published" | "scheduled" | "draft";
+  scheduledAt: string | null;
+  engagement: string | null;
+};
 
 export default function DashboardPage() {
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [recent, setRecent] = useState<Post[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [s, p] = await Promise.all([
+        fetch("/api/stats").then((r) => r.json()),
+        fetch("/api/posts").then((r) => r.json()),
+      ]);
+      setStats(s);
+      setRecent((p.posts ?? []).slice(0, 5));
+    })();
+  }, []);
+
+  const cards = [
+    { title: "Total Posts", value: String(stats?.total ?? "—"), icon: FileText },
+    {
+      title: "Scheduled",
+      value: String(stats?.scheduledUpcoming ?? "—"),
+      icon: Calendar,
+    },
+    { title: "Published", value: String(stats?.published ?? "—"), icon: TrendingUp },
+    { title: "AI Generated", value: String(stats?.aiGenerated ?? "—"), icon: Zap },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
@@ -57,7 +68,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
+        {cards.map((stat) => (
           <Card key={stat.title}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">
@@ -68,8 +79,7 @@ export default function DashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{stat.value}</div>
               <p className="text-xs text-muted-foreground">
-                <span className="text-emerald-500">{stat.change}</span> from
-                last month
+                live from local store
               </p>
             </CardContent>
           </Card>
@@ -83,7 +93,14 @@ export default function DashboardPage() {
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
         <TabsContent value="posts" className="space-y-4">
-          {recentPosts.map((post) => (
+          {recent.length === 0 && (
+            <Card>
+              <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+                No posts yet — generate one in AI Studio.
+              </CardContent>
+            </Card>
+          )}
+          {recent.map((post) => (
             <Card key={post.id}>
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
@@ -104,8 +121,12 @@ export default function DashboardPage() {
               <CardContent className="pb-3">
                 <div className="flex items-center gap-4 text-sm text-muted-foreground">
                   <span>{post.platform}</span>
-                  <span>{post.date}</span>
-                  {post.engagement !== "—" && (
+                  <span>
+                    {post.scheduledAt
+                      ? format(parseISO(post.scheduledAt), "MMM d, yyyy")
+                      : "unscheduled"}
+                  </span>
+                  {post.engagement && (
                     <span className="flex items-center gap-1">
                       <Users className="h-3 w-3" />
                       {post.engagement}

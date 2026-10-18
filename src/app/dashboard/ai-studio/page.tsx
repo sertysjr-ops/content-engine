@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sparkles, Copy, Check, RefreshCw, AlertCircle } from "lucide-react";
+import { Sparkles, Copy, Check, RefreshCw, AlertCircle, Save } from "lucide-react";
 
 const platforms = [
   { value: "twitter", label: "Twitter / X post" },
@@ -34,6 +34,8 @@ export default function AiStudioPage() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   async function generate() {
     if (!topic.trim()) return;
@@ -64,6 +66,34 @@ export default function AiStudioPage() {
     await navigator.clipboard.writeText(result);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  async function saveToLibrary() {
+    if (!result.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title:
+            result.split("\n")[0].slice(0, 80) ||
+            topic.slice(0, 80) ||
+            "AI draft",
+          content: result,
+          platform,
+          tone,
+          status: "draft",
+          aiGenerated: true,
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -191,6 +221,19 @@ export default function AiStudioPage() {
                       <>
                         <Copy className="mr-2 h-3.5 w-3.5" />
                         Copy
+                      </>
+                    )}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={saveToLibrary} disabled={saving}>
+                    {saved ? (
+                      <>
+                        <Check className="mr-2 h-3.5 w-3.5 text-emerald-500" />
+                        Saved
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-3.5 w-3.5" />
+                        {saving ? "Saving…" : "Save to library"}
                       </>
                     )}
                   </Button>

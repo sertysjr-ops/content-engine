@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -12,25 +13,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, FileText, Calendar, Plus, MoreHorizontal } from "lucide-react";
+import {
+  Search,
+  FileText,
+  Calendar,
+  Plus,
+  Trash2,
+  X,
+  Check,
+} from "lucide-react";
+import { format, parseISO } from "date-fns";
 
 type Post = {
-  id: number;
+  id: string;
   title: string;
+  content: string;
   platform: string;
   status: "published" | "scheduled" | "draft";
-  date: string;
-  engagement?: string;
+  scheduledAt: string | null;
+  engagement: string | null;
+  aiGenerated: boolean;
 };
-
-const initialPosts: Post[] = [
-  { id: 1, title: "10 AI Tools That Will 10x Your Productivity", platform: "Twitter", status: "published", date: "Jun 12, 2026", engagement: "1.2k" },
-  { id: 2, title: "How I Built a $10K MRR SaaS in 30 Days", platform: "LinkedIn", status: "scheduled", date: "Jun 15, 2026" },
-  { id: 3, title: "The Future of No-Code Development", platform: "Blog", status: "draft", date: "—" },
-  { id: 4, title: "5 Landing Page Mistakes (and fixes)", platform: "Twitter", status: "published", date: "Jun 9, 2026", engagement: "3.4k" },
-  { id: 5, title: "Weekly Wins #3", platform: "Twitter", status: "published", date: "Jun 6, 2026", engagement: "890" },
-  { id: 6, title: "Launch teaser video", platform: "YouTube", status: "scheduled", date: "Jun 24, 2026" },
-];
 
 const statusVariant = {
   published: "default",
@@ -38,13 +41,89 @@ const statusVariant = {
   draft: "outline",
 } as const;
 
+const platformLabel: Record<string, string> = {
+  twitter: "Twitter / X",
+  thread: "Twitter thread",
+  linkedin: "LinkedIn",
+  blog: "Blog",
+  youtube: "YouTube",
+};
+
 export default function ContentPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
-  const [posts] = useState(initialPosts);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNew, setShowNew] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newContent, setNewContent] = useState("");
+  const [newPlatform, setNewPlatform] = useState("twitter");
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/posts");
+      const data = await res.json();
+      setPosts(data.posts ?? []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function createPost() {
+    if (!newTitle.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newTitle,
+          content: newContent,
+          platform: newPlatform,
+          status: "draft",
+        }),
+      });
+      if (res.ok) {
+        setNewTitle("");
+        setNewContent("");
+        setShowNew(false);
+        await load();
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removePost(id: string) {
+    const res = await fetch(`/api/posts/${id}`, { method: "DELETE" });
+    if (res.ok) setPosts((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  async function advanceStatus(post: Post) {
+    const next =
+      post.status === "draft"
+        ? "scheduled"
+        : post.status === "scheduled"
+          ? "published"
+          : "draft";
+    const res = await fetch(`/api/posts/${post.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: next }),
+    });
+    if (res.ok) await load();
+  }
 
   const filtered = posts.filter((p) => {
-    const matchesQuery = p.title.toLowerCase().includes(query.toLowerCase());
+    const matchesQuery =
+      p.title.toLowerCase().includes(query.toLowerCase()) ||
+      p.content.toLowerCase().includes(query.toLowerCase());
     const matchesFilter = filter === "all" || p.status === filter;
     return matchesQuery && matchesFilter;
   });
@@ -58,11 +137,56 @@ export default function ContentPage() {
             All your posts, drafts, and scheduled content.
           </p>
         </div>
-        <Button className="bg-gradient-to-r from-violet-500 to-fuchsia-600 hover:from-violet-600 hover:to-fuchsia-700">
-          <Plus className="mr-2 h-4 w-4" />
-          New post
+        <Button
+          onClick={() => setShowNew((v) => !v)}
+          className="bg-gradient-to-r from-violet-500 to-fuchsia-600 hover:from-violet-600 hover:to-fuchsia-700"
+        >
+          {showNew ? <X className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
+          {showNew ? "Cancel" : "New post"}
         </Button>
       </div>
+
+      {showNew && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">New draft</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Input
+              placeholder="Post title"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+            />
+            <Textarea
+              placeholder="Content (or generate it in AI Studio and save it here)"
+              rows={4}
+              value={newContent}
+              onChange={(e) => setNewContent(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
+              <Select
+                value={newPlatform}
+                onValueChange={(v) => setNewPlatform(v ?? "twitter")}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(platformLabel).map(([v, l]) => (
+                    <SelectItem key={v} value={v}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button onClick={createPost} disabled={saving || !newTitle.trim()}>
+                <Check className="mr-2 h-4 w-4" />
+                {saving ? "Saving…" : "Save draft"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center gap-4">
         <div className="relative flex-1">
@@ -88,7 +212,14 @@ export default function ContentPage() {
       </div>
 
       <div className="grid gap-4">
-        {filtered.length === 0 && (
+        {loading && (
+          <Card>
+            <CardContent className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+              Loading posts…
+            </CardContent>
+          </Card>
+        )}
+        {!loading && filtered.length === 0 && (
           <Card>
             <CardContent className="flex h-32 items-center justify-center text-sm text-muted-foreground">
               No posts match your filters.
@@ -96,7 +227,10 @@ export default function ContentPage() {
           </Card>
         )}
         {filtered.map((post) => (
-          <Card key={post.id} className="transition-colors hover:border-violet-500/30">
+          <Card
+            key={post.id}
+            className="transition-colors hover:border-violet-500/30"
+          >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -106,27 +240,50 @@ export default function ContentPage() {
                   <div>
                     <CardTitle className="text-base">{post.title}</CardTitle>
                     <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>{post.platform}</span>
+                      <span>{platformLabel[post.platform] ?? post.platform}</span>
                       <span className="flex items-center gap-1">
                         <Calendar className="h-3 w-3" />
-                        {post.date}
+                        {post.scheduledAt
+                          ? format(parseISO(post.scheduledAt), "MMM d, yyyy")
+                          : "—"}
                       </span>
                       {post.engagement && (
                         <span>{post.engagement} impressions</span>
+                      )}
+                      {post.aiGenerated && (
+                        <span className="text-violet-500">AI ✦</span>
                       )}
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant={statusVariant[post.status]}>
-                    {post.status}
-                  </Badge>
-                  <Button variant="ghost" size="icon">
-                    <MoreHorizontal className="h-4 w-4" />
+                  <button
+                    onClick={() => advanceStatus(post)}
+                    title="Click to move: draft → scheduled → published"
+                    className="cursor-pointer"
+                  >
+                    <Badge variant={statusVariant[post.status]}>
+                      {post.status}
+                    </Badge>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removePost(post.id)}
+                    title="Delete post"
+                  >
+                    <Trash2 className="h-4 w-4 text-muted-foreground hover:text-red-500" />
                   </Button>
                 </div>
               </div>
             </CardHeader>
+            {post.content && (
+              <CardContent className="pt-0">
+                <p className="line-clamp-2 text-sm text-muted-foreground">
+                  {post.content}
+                </p>
+              </CardContent>
+            )}
           </Card>
         ))}
       </div>
