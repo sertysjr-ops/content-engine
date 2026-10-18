@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sparkles, Copy, Check, RefreshCw, AlertCircle, Save } from "lucide-react";
+import { Sparkles, Copy, Check, RefreshCw, AlertCircle, Save, CalendarPlus } from "lucide-react";
 
 const platforms = [
   { value: "twitter", label: "Twitter / X post" },
@@ -36,6 +36,46 @@ export default function AiStudioPage() {
   const [model, setModel] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // --- Fill my week state ---
+  const [weekTopic, setWeekTopic] = useState("");
+  const [weekTone, setWeekTone] = useState("casual");
+  const [weekLoading, setWeekLoading] = useState(false);
+  const [weekPosts, setWeekPosts] = useState<
+    { id: string; title: string; platform: string; scheduledAt: string }[]
+  >([]);
+  const [weekError, setWeekError] = useState<string | null>(null);
+
+  async function fillWeek() {
+    if (!weekTopic.trim()) return;
+    setWeekLoading(true);
+    setWeekError(null);
+    setWeekPosts([]);
+    try {
+      const res = await fetch("/api/generate-week", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: weekTopic, tone: weekTone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setWeekError(data.error + (data.hint ? ` — ${data.hint}` : ""));
+        return;
+      }
+      setWeekPosts(
+        data.posts.map((p: { id: string; title: string; platform: string; scheduledAt: string }) => ({
+          id: p.id,
+          title: p.title,
+          platform: p.platform,
+          scheduledAt: p.scheduledAt,
+        }))
+      );
+    } catch (err) {
+      setWeekError(String(err));
+    } finally {
+      setWeekLoading(false);
+    }
+  }
 
   async function generate() {
     if (!topic.trim()) return;
@@ -247,6 +287,97 @@ export default function AiStudioPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Fill my week */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarPlus className="h-5 w-5 text-fuchsia-500" />
+            Fill my week
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Give it one niche topic — it generates 5 varied posts (hook, thread,
+            LinkedIn take, hot take, blog teaser) and schedules them across the
+            next 7 days. All saved to your calendar automatically.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-[1fr_160px_auto]">
+            <Input
+              placeholder='e.g. "building apps with local AI"'
+              value={weekTopic}
+              onChange={(e) => setWeekTopic(e.target.value)}
+            />
+            <Select value={weekTone} onValueChange={(v) => setWeekTone(v ?? "casual")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {tones.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={fillWeek}
+              disabled={weekLoading || !weekTopic.trim()}
+              variant="secondary"
+              className="bg-fuchsia-500/10 text-fuchsia-400 hover:bg-fuchsia-500/20"
+            >
+              {weekLoading ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Generating 5 posts…
+                </>
+              ) : (
+                <>
+                  <CalendarPlus className="mr-2 h-4 w-4" />
+                  Generate week
+                </>
+              )}
+            </Button>
+          </div>
+
+          {weekError && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Week generation failed</p>
+                <p className="mt-1 text-red-300/80">{weekError}</p>
+              </div>
+            </div>
+          )}
+
+          {weekPosts.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-emerald-400">
+                ✅ {weekPosts.length} posts scheduled — see them on the calendar
+              </p>
+              <ul className="divide-y divide-border rounded-lg border">
+                {weekPosts.map((p) => (
+                  <li
+                    key={p.id}
+                    className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm"
+                  >
+                    <span className="truncate">{p.title}</span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <Badge variant="secondary">{p.platform}</Badge>
+                      <span className="text-muted-foreground">
+                        {new Date(p.scheduledAt).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

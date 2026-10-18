@@ -101,6 +101,41 @@ try {
   const stats1 = await api("/api/stats");
   check("stats back to 6 after delete", stats1.body.total === 6);
 
+  // --- generate-week: bulk AI pack ---
+  const week = await api("/api/generate-week", {
+    method: "POST",
+    body: JSON.stringify({ topic: "test niche: mechanical keyboards", tone: "casual" }),
+  });
+  check(
+    "POST /api/generate-week returns scheduled posts",
+    week.status === 200 && week.body.posts?.length >= 3,
+    `got ${week.body.posts?.length} posts`
+  );
+  const weekPosts = week.body.posts ?? [];
+  check(
+    "week posts all scheduled + aiGenerated",
+    weekPosts.every(
+      (p) => p.status === "scheduled" && p.aiGenerated === true && p.scheduledAt
+    )
+  );
+  check(
+    "week posts scheduled in the future",
+    weekPosts.every((p) => new Date(p.scheduledAt).getTime() > Date.now())
+  );
+  const platformsSeen = new Set(weekPosts.map((p) => p.platform));
+  check(
+    "week pack has platform variety",
+    platformsSeen.size >= 2,
+    `platforms: ${[...platformsSeen].join(",")}`
+  );
+
+  // cleanup week posts so the store returns to seed state
+  for (const p of weekPosts) {
+    await api(`/api/posts/${p.id}`, { method: "DELETE" });
+  }
+  const stats2 = await api("/api/stats");
+  check("stats back to 6 after week cleanup", stats2.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
