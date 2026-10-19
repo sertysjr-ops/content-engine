@@ -24,6 +24,7 @@ export type Post = {
   scheduledAt: string | null; // ISO
   engagement: string | null; // e.g. "1.2k" — manual until real analytics
   aiGenerated: boolean;
+  recycledFrom?: string | null; // source post id when minted via /api/recycle
   createdAt: string;
   updatedAt: string;
 };
@@ -161,6 +162,7 @@ export function createPost(input: PostInput): Post {
     scheduledAt: input.scheduledAt ?? null,
     engagement: input.engagement ?? null,
     aiGenerated: input.aiGenerated ?? false,
+    recycledFrom: input.recycledFrom ?? null,
     createdAt: now,
     updatedAt: now,
   };

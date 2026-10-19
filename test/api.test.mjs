@@ -136,6 +136,49 @@ try {
   const stats2 = await api("/api/stats");
   check("stats back to 6 after week cleanup", stats2.body.total === 6);
 
+  // --- recycle: mint fresh angles from an existing post ---
+  const seedList = await api("/api/posts");
+  const source = seedList.body.posts.find((p) => p.title.includes("AI Tools"));
+  check("recycle: seed source post exists", !!source);
+
+  const recycle = await api("/api/recycle", {
+    method: "POST",
+    body: JSON.stringify({ postId: source.id, count: 3 }),
+  });
+  check(
+    "POST /api/recycle returns 3 variants",
+    recycle.status === 200 && recycle.body.variants?.length === 3,
+    `got ${recycle.body.variants?.length} status=${recycle.status} err=${recycle.body.error ?? ""}`
+  );
+  const variants = recycle.body.variants ?? [];
+  check(
+    "variants are drafts, aiGenerated, linked to source",
+    variants.every(
+      (v) =>
+        v.status === "draft" &&
+        v.aiGenerated === true &&
+        v.recycledFrom === source.id &&
+        v.platform === source.platform
+    )
+  );
+  check(
+    "variants differ from source content",
+    variants.every((v) => v.content.trim() !== source.content.trim())
+  );
+
+  const missing = await api("/api/recycle", {
+    method: "POST",
+    body: JSON.stringify({ postId: "does-not-exist" }),
+  });
+  check("recycle unknown post → 404", missing.status === 404);
+
+  // cleanup variants
+  for (const v of variants) {
+    await api(`/api/posts/${v.id}`, { method: "DELETE" });
+  }
+  const stats3 = await api("/api/stats");
+  check("stats back to 6 after recycle cleanup", stats3.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");

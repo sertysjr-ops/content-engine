@@ -21,6 +21,8 @@ import {
   Trash2,
   X,
   Check,
+  RefreshCw,
+  Recycle,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
@@ -33,6 +35,7 @@ type Post = {
   scheduledAt: string | null;
   engagement: string | null;
   aiGenerated: boolean;
+  recycledFrom?: string | null;
 };
 
 const statusVariant = {
@@ -59,6 +62,8 @@ export default function ContentPage() {
   const [newContent, setNewContent] = useState("");
   const [newPlatform, setNewPlatform] = useState("twitter");
   const [saving, setSaving] = useState(false);
+  const [recycling, setRecycling] = useState<string | null>(null);
+  const [recycleFlash, setRecycleFlash] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,6 +123,31 @@ export default function ContentPage() {
       body: JSON.stringify({ status: next }),
     });
     if (res.ok) await load();
+  }
+
+  async function recyclePost(post: Post) {
+    setRecycling(post.id);
+    try {
+      const res = await fetch("/api/recycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postId: post.id, count: 3 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecycleFlash((f) => ({ ...f, [post.id]: data.variants?.length ?? 0 }));
+        setTimeout(() => {
+          setRecycleFlash((f) => {
+            const next = { ...f };
+            delete next[post.id];
+            return next;
+          });
+        }, 4000);
+        await load();
+      }
+    } finally {
+      setRecycling(null);
+    }
   }
 
   const filtered = posts.filter((p) => {
@@ -253,10 +283,36 @@ export default function ContentPage() {
                       {post.aiGenerated && (
                         <span className="text-violet-500">AI ✦</span>
                       )}
+                      {post.recycledFrom && (
+                        <span
+                          className="text-emerald-600"
+                          title={`Recycled from: ${posts.find((p) => p.id === post.recycledFrom)?.title ?? "deleted post"}`}
+                        >
+                          recycled ♻
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {recycleFlash[post.id] !== undefined && (
+                    <span className="text-xs text-emerald-500">
+                      +{recycleFlash[post.id]} variants drafted
+                    </span>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => recyclePost(post)}
+                    disabled={recycling === post.id}
+                    title="AI-recycle: mint 3 fresh angles as drafts"
+                  >
+                    {recycling === post.id ? (
+                      <RefreshCw className="h-4 w-4 animate-spin text-violet-500" />
+                    ) : (
+                      <Recycle className="h-4 w-4 text-muted-foreground hover:text-violet-500" />
+                    )}
+                  </Button>
                   <button
                     onClick={() => advanceStatus(post)}
                     title="Click to move: draft → scheduled → published"
