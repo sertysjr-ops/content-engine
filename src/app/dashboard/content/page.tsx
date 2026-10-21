@@ -23,6 +23,7 @@ import {
   Check,
   RefreshCw,
   Recycle,
+  BarChart3,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
@@ -64,6 +65,9 @@ export default function ContentPage() {
   const [saving, setSaving] = useState(false);
   const [recycling, setRecycling] = useState<string | null>(null);
   const [recycleFlash, setRecycleFlash] = useState<Record<string, number>>({});
+  const [metricsFor, setMetricsFor] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<Record<string, string>>({});
+  const [metricsFlash, setMetricsFlash] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,6 +151,38 @@ export default function ContentPage() {
       }
     } finally {
       setRecycling(null);
+    }
+  }
+
+  async function saveMetrics(post: Post) {
+    const body: Record<string, number> = {};
+    for (const k of ["likes", "replies", "reposts", "impressions"] as const) {
+      const v = Number(metrics[`${post.id}:${k}`] ?? "");
+      if (metrics[`${post.id}:${k}`] !== undefined && metrics[`${post.id}:${k}`] !== "" && Number.isFinite(v)) {
+        body[k] = v;
+      }
+    }
+    if (Object.keys(body).length === 0) return;
+    const res = await fetch("/api/engagement", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postId: post.id, ...body }),
+    });
+    if (res.ok) {
+      setMetricsFor(null);
+      setMetrics((m) => {
+        const next = { ...m };
+        for (const k of Object.keys(body)) delete next[`${post.id}:${k}`];
+        return next;
+      });
+      setMetricsFlash((f) => ({ ...f, [post.id]: "snapshot saved 📈" }));
+      setTimeout(() => {
+        setMetricsFlash((f) => {
+          const n = { ...f };
+          delete n[post.id];
+          return n;
+        });
+      }, 3000);
     }
   }
 
@@ -295,6 +331,21 @@ export default function ContentPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {metricsFlash[post.id] && (
+                    <span className="text-xs text-emerald-500">{metricsFlash[post.id]}</span>
+                  )}
+                  {post.status === "published" && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() =>
+                        setMetricsFor((cur) => (cur === post.id ? null : post.id))
+                      }
+                      title="Log engagement metrics (feeds the Analytics dashboard)"
+                    >
+                      <BarChart3 className="h-4 w-4 text-muted-foreground hover:text-cyan-500" />
+                    </Button>
+                  )}
                   {recycleFlash[post.id] !== undefined && (
                     <span className="text-xs text-emerald-500">
                       +{recycleFlash[post.id]} variants drafted
@@ -338,6 +389,47 @@ export default function ContentPage() {
                 <p className="line-clamp-2 text-sm text-muted-foreground">
                   {post.content}
                 </p>
+              </CardContent>
+            )}
+            {metricsFor === post.id && (
+              <CardContent className="border-t pt-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  {(
+                    [
+                      ["likes", "Likes"],
+                      ["replies", "Replies"],
+                      ["reposts", "Reposts"],
+                      ["impressions", "Impressions"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <div key={key} className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">{label}</label>
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        className="w-28"
+                        value={metrics[`${post.id}:${key}`] ?? ""}
+                        onChange={(e) =>
+                          setMetrics((m) => ({
+                            ...m,
+                            [`${post.id}:${key}`]: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    size="sm"
+                    onClick={() => saveMetrics(post)}
+                    className="bg-gradient-to-r from-cyan-500 to-violet-600 hover:from-cyan-600 hover:to-violet-700"
+                  >
+                    <Check className="mr-1 h-3 w-3" /> Save snapshot
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Snapshots stack over time — Analytics charts the trend.
+                  </span>
+                </div>
               </CardContent>
             )}
           </Card>

@@ -1,41 +1,99 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  BarChart3,
-  TrendingUp,
-  Users,
-  Heart,
-  MessageSquare,
-  Share2,
-  Eye,
-} from "lucide-react";
+import { BarChart3, TrendingUp, Heart, MessageSquare, Repeat2, Eye } from "lucide-react";
 
-const kpis = [
-  { title: "Total Impressions", value: "48.2k", change: "+18%", icon: Eye },
-  { title: "Engagements", value: "3,914", change: "+9%", icon: Heart },
-  { title: "New Followers", value: "+412", change: "+22%", icon: Users },
-  { title: "Click-throughs", value: "1,208", change: "+14%", icon: Share2 },
-];
+type Snapshot = {
+  likes: number;
+  replies: number;
+  reposts: number;
+  impressions: number;
+  capturedAt: string;
+};
 
-const topPosts = [
-  { title: "5 Landing Page Mistakes (and fixes)", platform: "Twitter", impressions: "3.4k", engagement: "12.4%", comments: 34 },
-  { title: "10 AI Tools That Will 10x Your Productivity", platform: "Twitter", impressions: "1.2k", engagement: "9.1%", comments: 12 },
-  { title: "How I Built a $10K MRR SaaS in 30 Days", platform: "LinkedIn", impressions: "890", engagement: "7.8%", comments: 28 },
-  { title: "Weekly Wins #3", platform: "Twitter", impressions: "890", engagement: "6.2%", comments: 8 },
-];
+type PostRow = {
+  postId: string;
+  title: string;
+  latest: Snapshot | null;
+  snapshots: number;
+  history: Snapshot[];
+  growth: {
+    likes: number;
+    replies: number;
+    reposts: number;
+    impressions: number;
+  } | null;
+};
 
-// Simple sparkline bars (pure CSS, no chart lib needed yet)
-const weeklyBars = [42, 58, 35, 71, 66, 89, 54];
+type Summary = {
+  totals: Snapshot & { postsTracked: number };
+  posts: PostRow[];
+};
+
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function fmt(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
 
 export default function AnalyticsPage() {
+  const [data, setData] = useState<Summary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/engagement");
+      if (res.ok) setData(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const totals = data?.totals;
+  const engagements = totals ? totals.likes + totals.replies + totals.reposts : 0;
+  const engRate =
+    totals && totals.impressions > 0
+      ? ((engagements / totals.impressions) * 100).toFixed(1) + "%"
+      : "—";
+
+  const kpis = [
+    { title: "Impressions", value: totals ? fmt(totals.impressions) : "—", icon: Eye },
+    { title: "Engagements", value: totals ? fmt(engagements) : "—", icon: Heart },
+    { title: "Engagement rate", value: engRate, icon: TrendingUp },
+    { title: "Posts tracked", value: totals ? String(totals.postsTracked) : "—", icon: BarChart3 },
+  ];
+
+  // Weekly capture activity: bucket every snapshot's capturedAt into the
+  // weekday it happened on — the bar chart shows when you actually pulled
+  // numbers (and how the cadence grows once the habit sticks).
+  const weekly = [0, 0, 0, 0, 0, 0, 0]; // JS getDay(): Sun=0 … Sat=6
+  if (data) {
+    for (const p of data.posts) {
+      for (const s of p.history ?? []) {
+        weekly[new Date(s.capturedAt).getDay()] += 1;
+      }
+    }
+  }
+  // Reorder so the visual starts on Monday: Mon,Tue,…,Sun
+  const ordered = [1, 2, 3, 4, 5, 6, 0].map((d) => weekly[d]);
+  const orderedMax = Math.max(...ordered, 1);
+  const hasSnapshots = weekly.some((n) => n > 0);
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
         <p className="text-muted-foreground">
-          Performance across all platforms, last 30 days.
+          Real numbers — captured from the Content page, stored as time series.
         </p>
       </div>
 
@@ -49,8 +107,7 @@ export default function AnalyticsPage() {
             <CardContent>
               <div className="text-2xl font-bold">{kpi.value}</div>
               <p className="text-xs text-muted-foreground">
-                <span className="text-emerald-500">{kpi.change}</span> vs
-                previous period
+                {loading ? "loading…" : "latest snapshot per post"}
               </p>
             </CardContent>
           </Card>
@@ -58,32 +115,35 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Weekly activity sparkline */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BarChart3 className="h-5 w-5 text-violet-500" />
-              Weekly Activity
+              Capture Cadence
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex h-[200px] items-end justify-between gap-3">
-              {weeklyBars.map((h, i) => (
-                <div key={i} className="flex flex-1 flex-col items-center gap-2">
-                  <div
-                    className="w-full rounded-t-lg bg-gradient-to-t from-violet-600 to-fuchsia-500 transition-all hover:opacity-80"
-                    style={{ height: `${h}%` }}
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]}
-                  </span>
-                </div>
-              ))}
-            </div>
+            {!hasSnapshots ? (
+              <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">
+                No snapshots yet — bars appear once you log metrics.
+              </div>
+            ) : (
+              <div className="flex h-[200px] items-end justify-between gap-3">
+                {ordered.map((n, i) => (
+                  <div key={i} className="flex flex-1 flex-col items-center gap-2">
+                    <div
+                      className="w-full rounded-t-lg bg-gradient-to-t from-violet-600 to-fuchsia-500 transition-all hover:opacity-80"
+                      style={{ height: `${(n / orderedMax) * 100}%` }}
+                      title={`${n} snapshot${n === 1 ? "" : "s"}`}
+                    />
+                    <span className="text-xs text-muted-foreground">{DAY_LABELS[i]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Top posts */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -92,10 +152,24 @@ export default function AnalyticsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {topPosts.map((post, i) => (
+          {!loading && (!data || data.posts.length === 0) && (
+            <div className="flex h-32 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+              <span>No metrics yet.</span>
+              <span className="text-xs">
+                Hit the 📈 button on a published post in the Content page to log
+                its numbers — snapshots stack up over time and feed this dashboard.
+              </span>
+            </div>
+          )}
+          <div className="space-y-4">
+            {data?.posts.map((post, i) => {
+              const s = post.latest;
+              if (!s) return null;
+              const postEng = s.likes + s.replies + s.reposts;
+              const rate = s.impressions > 0 ? ((postEng / s.impressions) * 100).toFixed(1) : "0.0";
+              return (
                 <div
-                  key={post.title}
+                  key={post.postId}
                   className="flex items-center gap-4 rounded-lg border p-3 transition-colors hover:bg-muted/50"
                 >
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-sm font-bold text-violet-500">
@@ -104,20 +178,33 @@ export default function AnalyticsPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{post.title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {post.platform} · {post.impressions} impressions
+                      {fmt(s.impressions)} impressions · {post.snapshots} snapshot
+                      {post.snapshots === 1 ? "" : "s"}
+                      {post.growth && post.growth.impressions !== 0 && (
+                        <span className={post.growth.impressions > 0 ? " text-emerald-500" : " text-red-500"}>
+                          {" "}({post.growth.impressions > 0 ? "+" : ""}
+                          {fmt(post.growth.impressions)} since first capture)
+                        </span>
+                      )}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-3 text-xs">
-                    <Badge variant="secondary">{post.engagement}</Badge>
-                    <span className="flex items-center gap-1 text-muted-foreground">
-                      <MessageSquare className="h-3 w-3" />
-                      {post.comments}
+                  <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Heart className="h-3 w-3" /> {fmt(s.likes)}
                     </span>
+                    <span className="flex items-center gap-1">
+                      <MessageSquare className="h-3 w-3" /> {fmt(s.replies)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Repeat2 className="h-3 w-3" /> {fmt(s.reposts)}
+                    </span>
+                    <Badge variant="secondary">{rate}%</Badge>
                   </div>
                 </div>
-              ))}
-            </div>
-          </CardContent>
+              );
+            })}
+          </div>
+        </CardContent>
         </Card>
       </div>
     </div>

@@ -179,6 +179,85 @@ try {
   const stats3 = await api("/api/stats");
   check("stats back to 6 after recycle cleanup", stats3.body.total === 6);
 
+  // --- engagement: time-series metric snapshots ---
+  const pub = seedList.body.posts.find((p) => p.status === "published");
+  const eng1 = await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: pub.id, likes: 42, replies: 7, impressions: 1200 }),
+  });
+  check(
+    "POST /api/engagement records a snapshot",
+    eng1.status === 200 && eng1.body.recorded?.length === 1 &&
+      eng1.body.recorded[0].snapshot.likes === 42
+  );
+
+  const eng2 = await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: pub.id, likes: 60, impressions: 1500 }),
+  });
+  check("second snapshot appends", eng2.status === 200);
+
+  const hist = await api(`/api/engagement?postId=${pub.id}`);
+  check(
+    "GET history returns both snapshots, chronological",
+    hist.body.history?.length === 2 &&
+      hist.body.history[1].likes === 60 &&
+      hist.body.latest?.impressions === 1500
+  );
+
+  const summary = await api("/api/engagement");
+  const row = summary.body.posts?.find((r) => r.postId === pub.id);
+  check(
+    "summary rolls up latest + growth",
+    summary.status === 200 &&
+      summary.body.totals?.postsTracked >= 1 &&
+      row?.growth?.likes === 18 &&
+      row?.title === pub.title &&
+      Array.isArray(row?.history)
+  );
+
+  const batch = await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ entries: [
+      { postId: pub.id, reposts: 5 },
+      { postId: "does-not-exist", likes: 1 },
+      { bogus: true },
+    ] }),
+  });
+  check(
+    "batch: good entries recorded, bad ones reported",
+    batch.status === 200 &&
+      batch.body.recorded?.length === 1 &&
+      batch.body.failed?.length === 2
+  );
+
+  const badMetric = await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: pub.id, likes: -5 }),
+  });
+  check("negative metric rejected", badMetric.status === 400 || badMetric.status === 404);
+
+  const orphan = await api("/api/engagement?postId=does-not-exist");
+  check("GET unknown post → 404", orphan.status === 404);
+
+  // delete the post → its snapshots become invisible to summary
+  await api(`/api/posts/${pub.id}`, { method: "DELETE" });
+  await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: pub.title, content: pub.content, platform: pub.platform,
+      status: "published", engagement: pub.engagement,
+    }),
+  });
+  const summary2 = await api("/api/engagement");
+  const orphanRow = summary2.body.posts?.find((r) => r.postId === pub.id);
+  check(
+    "deleted post's snapshots hidden from summary",
+    !orphanRow && summary2.body.totals.postsTracked === 0
+  );
+  const stats4 = await api("/api/stats");
+  check("post store restored to 6 posts", stats4.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
