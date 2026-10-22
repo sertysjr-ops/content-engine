@@ -240,6 +240,66 @@ try {
   const orphan = await api("/api/engagement?postId=does-not-exist");
   check("GET unknown post → 404", orphan.status === 404);
 
+  // --- CSV import: bulk capture from platform exports ---
+  const csvGood = [
+    "post,likes,comments,retweets,views",
+    `"${source.title}",120,8,15,"4,500"`,
+    `${source.id},121,,,4600`,
+  ].join("\n");
+  const imp = await api("/api/engagement/import", {
+    method: "POST",
+    body: JSON.stringify({ csv: csvGood }),
+  });
+  check(
+    "CSV import by title + id (aliases + quoted thousands)",
+    imp.status === 200 && imp.body.imported === 2,
+    `status=${imp.status} imported=${imp.body.imported} err=${imp.body.error ?? ""}`
+  );
+  check(
+    "CSV snapshot values parsed (4500 from \"4,500\")",
+    imp.body.results?.[0]?.snapshot?.likes === 120 &&
+      imp.body.results?.[0]?.snapshot?.impressions === 4500 &&
+      imp.body.results?.[0]?.snapshot?.replies === 8
+  );
+
+  const csvMixed = [
+    "post,likes,impressions",
+    "No Such Post Ever,10,100",
+    `${source.id},notanumber,50`,
+    `${source.id},33,700`,
+  ].join("\r\n");
+  const imp2 = await api("/api/engagement/import", {
+    method: "POST",
+    body: JSON.stringify({ csv: csvMixed }),
+  });
+  check(
+    "CSV import reports bad rows, still imports good ones (CRLF ok)",
+    imp2.status === 200 &&
+      imp2.body.imported === 1 &&
+      imp2.body.failed?.length === 2 &&
+      imp2.body.failed.some((f) => f.detail.includes("not found")) &&
+      imp2.body.failed.some((f) => f.detail.includes("bad number"))
+  );
+
+  const impBad = await api("/api/engagement/import", {
+    method: "POST",
+    body: JSON.stringify({ csv: "likes,impressions\n10,20" }),
+  });
+  check("CSV without post column → 400", impBad.status === 400);
+
+  const impEmpty = await api("/api/engagement/import", {
+    method: "POST",
+    body: JSON.stringify({ csv: "post,likes" }),
+  });
+  check("CSV with no data rows → 400", impEmpty.status === 400);
+
+  const csvHist = await api(`/api/engagement?postId=${source.id}`);
+  check(
+    "CSV captures land in history (chronological)",
+    csvHist.body.history?.length >= 2 &&
+      csvHist.body.latest?.likes === 33
+  );
+
   // delete the post → its snapshots become invisible to summary
   await api(`/api/posts/${pub.id}`, { method: "DELETE" });
   await api("/api/posts", {

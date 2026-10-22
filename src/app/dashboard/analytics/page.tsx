@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, TrendingUp, Heart, MessageSquare, Repeat2, Eye, Recycle, Lightbulb } from "lucide-react";
+import { BarChart3, TrendingUp, Heart, MessageSquare, Repeat2, Eye, Recycle, Lightbulb, Upload } from "lucide-react";
 
 type Snapshot = {
   likes: number;
@@ -58,6 +58,51 @@ const SIGNAL_STYLES: Record<string, string> = {
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/** Tiny inline SVG sparkline of a metric over time. No deps, no canvas. */
+function Sparkline({
+  values,
+  width = 88,
+  height = 28,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+}) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const pad = 2;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((v - min) / range) * (height - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = pts[pts.length - 1].split(",");
+  const trending = values[values.length - 1] >= values[0];
+  const stroke = trending ? "#10b981" : "#ef4444";
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="shrink-0"
+      aria-label={`trend ${trending ? "up" : "down"} over ${values.length} captures`}
+    >
+      <polyline
+        points={pts.join(" ")}
+        fill="none"
+        stroke={stroke}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        opacity="0.85"
+      />
+      <circle cx={last[0]} cy={last[1]} r="2.5" fill={stroke} />
+    </svg>
+  );
+}
+
 function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
@@ -70,6 +115,10 @@ export default function AnalyticsPage() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [recycling, setRecycling] = useState<string | null>(null);
   const [recycleFlash, setRecycleFlash] = useState<string | null>(null);
+  const [csvText, setCsvText] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importErrs, setImportErrs] = useState<{ row: number; detail: string }[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,6 +168,32 @@ export default function AnalyticsPage() {
     },
     [loadSuggestions]
   );
+
+  const doImport = useCallback(async () => {
+    if (csvText.trim() === "") return;
+    setImporting(true);
+    setImportMsg(null);
+    setImportErrs([]);
+    try {
+      const res = await fetch("/api/engagement/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv: csvText }),
+      });
+      const body = await res.json();
+      if (res.ok) {
+        setImportMsg(`Imported ${body.imported} row${body.imported === 1 ? "" : "s"} ✓`);
+        setCsvText("");
+        load();
+        loadSuggestions();
+      } else {
+        setImportMsg(body.error ?? "import failed");
+      }
+      setImportErrs(body.failed ?? []);
+    } finally {
+      setImporting(false);
+    }
+  }, [csvText, load, loadSuggestions]);
 
   const totals = data?.totals;
   const engagements = totals ? totals.likes + totals.replies + totals.reposts : 0;
@@ -251,6 +326,7 @@ export default function AnalyticsPage() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                    <Sparkline values={(post.history ?? []).map((h) => h.impressions)} />
                     <span className="flex items-center gap-1">
                       <Heart className="h-3 w-3" /> {fmt(s.likes)}
                     </span>
@@ -334,6 +410,56 @@ export default function AnalyticsPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5 text-sky-500" />
+            Import metrics from CSV
+            <span className="text-xs font-normal text-muted-foreground">
+              paste an export from any platform dashboard
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Header row required. Columns: <code className="rounded bg-muted px-1">post</code> (title or id),{" "}
+            <code className="rounded bg-muted px-1">likes</code>,{" "}
+            <code className="rounded bg-muted px-1">replies</code>,{" "}
+            <code className="rounded bg-muted px-1">reposts</code>,{" "}
+            <code className="rounded bg-muted px-1">impressions</code> — aliases like comments/views/retweets work too.
+          </p>
+          <textarea
+            value={csvText}
+            onChange={(e) => setCsvText(e.target.value)}
+            rows={4}
+            placeholder={"post,likes,replies,reposts,impressions\n10 AI Tools That Will 10x Your Productivity,120,8,15,\"4,500\""}
+            className="w-full rounded-md border bg-muted/30 px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-sky-500/40"
+          />
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              onClick={doImport}
+              disabled={importing || csvText.trim() === ""}
+              className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-sky-500 disabled:opacity-50"
+            >
+              {importing ? "importing…" : "Import"}
+            </button>
+            {importMsg && <span className="text-xs text-muted-foreground">{importMsg}</span>}
+          </div>
+          {importErrs.length > 0 && (
+            <div className="mt-2 space-y-1 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2">
+              {importErrs.slice(0, 5).map((e, i) => (
+                <p key={i} className="text-xs text-red-500">
+                  row {e.row}: {e.detail}
+                </p>
+              ))}
+              {importErrs.length > 5 && (
+                <p className="text-xs text-red-500">…and {importErrs.length - 5} more</p>
+              )}
             </div>
           )}
         </CardContent>
