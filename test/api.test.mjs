@@ -258,6 +258,57 @@ try {
   const stats4 = await api("/api/stats");
   check("post store restored to 6 posts", stats4.body.total === 6);
 
+  // --- recycle-suggest: engagement-driven refresh ranking ---
+  const rs = await api("/api/recycle-suggest?limit=2");
+  check(
+    "recycle-suggest: ≤ limit, all published, has score/reason/signals",
+    rs.status === 200 &&
+      rs.body.suggestions?.length === 2 &&
+      rs.body.suggestions.every(
+        (s) =>
+          s.post.status === "published" &&
+          typeof s.score === "number" &&
+          s.score > 0 &&
+          typeof s.reason === "string" &&
+          s.reason.length > 0 &&
+          Array.isArray(s.signals) &&
+          s.signals.length > 0
+      )
+  );
+
+  // fresh post with declining impressions must top the radar
+  const radarPost = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Radar probe: declining post",
+      content: "probe",
+      platform: "twitter",
+      status: "published",
+    }),
+  });
+  const rp = radarPost.body.post;
+  await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: rp.id, likes: 100, impressions: 5000 }),
+  });
+  await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: rp.id, likes: 101, impressions: 2000 }),
+  });
+  const rs2 = await api("/api/recycle-suggest?limit=1");
+  check(
+    "declining post tops radar with 'declining' + 'high-reach' signals",
+    rs2.body.suggestions?.[0]?.post.id === rp.id &&
+      rs2.body.suggestions[0].signals.includes("declining") &&
+      rs2.body.suggestions[0].signals.includes("high-reach"),
+    `got ${rs2.body.suggestions?.[0]?.post.title} signals=${rs2.body.suggestions?.[0]?.signals}`
+  );
+  check(
+    "declining reason mentions the drop",
+    /declining/.test(rs2.body.suggestions?.[0]?.reason ?? "")
+  );
+  await api(`/api/posts/${rp.id}`, { method: "DELETE" });
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");

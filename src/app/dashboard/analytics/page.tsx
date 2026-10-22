@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, TrendingUp, Heart, MessageSquare, Repeat2, Eye } from "lucide-react";
+import { BarChart3, TrendingUp, Heart, MessageSquare, Repeat2, Eye, Recycle, Lightbulb } from "lucide-react";
 
 type Snapshot = {
   likes: number;
@@ -32,6 +32,30 @@ type Summary = {
   posts: PostRow[];
 };
 
+type SuggestionPost = {
+  id: string;
+  title: string;
+  platform: string;
+  status: string;
+  createdAt: string;
+};
+
+type Suggestion = {
+  post: SuggestionPost;
+  score: number;
+  reason: string;
+  signals: string[];
+};
+
+const SIGNAL_STYLES: Record<string, string> = {
+  declining: "bg-red-500/10 text-red-500",
+  growing: "bg-emerald-500/10 text-emerald-500",
+  "high-reach": "bg-violet-500/10 text-violet-500",
+  "thin-data": "bg-amber-500/10 text-amber-500",
+  "never-measured": "bg-amber-500/10 text-amber-500",
+  aged: "bg-sky-500/10 text-sky-500",
+};
+
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function fmt(n: number): string {
@@ -43,6 +67,9 @@ function fmt(n: number): string {
 export default function AnalyticsPage() {
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [recycling, setRecycling] = useState<string | null>(null);
+  const [recycleFlash, setRecycleFlash] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,9 +81,44 @@ export default function AnalyticsPage() {
     }
   }, []);
 
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/recycle-suggest?limit=3");
+      if (res.ok) {
+        const body = await res.json();
+        setSuggestions(body.suggestions ?? []);
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadSuggestions();
+  }, [load, loadSuggestions]);
+
+  const doRecycle = useCallback(
+    async (postId: string) => {
+      setRecycling(postId);
+      setRecycleFlash(null);
+      try {
+        const res = await fetch("/api/recycle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ postId, count: 3 }),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          setRecycleFlash(`+${body.variants?.length ?? 0} variants drafted — find them in Content`);
+          loadSuggestions();
+        } else {
+          setRecycleFlash("recycle failed — is Ollama running?");
+        }
+      } finally {
+        setRecycling(null);
+      }
+    },
+    [loadSuggestions]
+  );
 
   const totals = data?.totals;
   const engagements = totals ? totals.likes + totals.replies + totals.reposts : 0;
@@ -207,6 +269,75 @@ export default function AnalyticsPage() {
         </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-amber-500" />
+            Recycle Radar
+            <span className="text-xs font-normal text-muted-foreground">
+              what to refresh next, scored from your real metrics
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recycleFlash && (
+            <div className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600">
+              {recycleFlash}
+            </div>
+          )}
+          {suggestions.length === 0 ? (
+            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+              No published posts to recycle yet.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {suggestions.map((s, i) => {
+                const maxScore = suggestions[0]?.score || 1;
+                return (
+                  <div
+                    key={s.post.id}
+                    className="flex items-center gap-4 rounded-lg border p-3"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-sm font-bold text-amber-500">
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-medium">{s.post.title}</p>
+                        {s.signals.map((sig) => (
+                          <Badge
+                            key={sig}
+                            variant="secondary"
+                            className={SIGNAL_STYLES[sig] ?? ""}
+                          >
+                            {sig}
+                          </Badge>
+                        ))}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{s.reason}</p>
+                      <div className="mt-1.5 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-500"
+                          style={{ width: `${(s.score / maxScore) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => doRecycle(s.post.id)}
+                      disabled={recycling !== null}
+                      className="flex shrink-0 items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                    >
+                      <Recycle className="h-3.5 w-3.5" />
+                      {recycling === s.post.id ? "working…" : "Recycle"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
