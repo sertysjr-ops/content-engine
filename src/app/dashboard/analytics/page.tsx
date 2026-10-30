@@ -47,6 +47,15 @@ type Suggestion = {
   signals: string[];
 };
 
+type MetricKey = "impressions" | "likes" | "replies" | "reposts";
+
+const METRICS: { key: MetricKey; label: string }[] = [
+  { key: "impressions", label: "Impressions" },
+  { key: "likes", label: "Likes" },
+  { key: "replies", label: "Replies" },
+  { key: "reposts", label: "Reposts" },
+];
+
 const SIGNAL_STYLES: Record<string, string> = {
   declining: "bg-red-500/10 text-red-500",
   growing: "bg-emerald-500/10 text-emerald-500",
@@ -119,6 +128,7 @@ export default function AnalyticsPage() {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [importErrs, setImportErrs] = useState<{ row: number; detail: string }[]>([]);
+  const [metric, setMetric] = useState<MetricKey>("impressions");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -283,9 +293,24 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex flex-wrap items-center gap-2">
               <TrendingUp className="h-5 w-5 text-violet-500" />
               Top Performing Posts
+              <span className="ml-auto flex items-center gap-1 rounded-md bg-muted p-0.5">
+                {METRICS.map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setMetric(m.key)}
+                    className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                      metric === m.key
+                        ? "bg-violet-600 text-white"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -304,6 +329,7 @@ export default function AnalyticsPage() {
               if (!s) return null;
               const postEng = s.likes + s.replies + s.reposts;
               const rate = s.impressions > 0 ? ((postEng / s.impressions) * 100).toFixed(1) : "0.0";
+              const growth = post.growth?.[metric] ?? 0;
               return (
                 <div
                   key={post.postId}
@@ -315,18 +341,18 @@ export default function AnalyticsPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{post.title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {fmt(s.impressions)} impressions · {post.snapshots} snapshot
+                      {fmt(s[metric])} {metric} · {post.snapshots} snapshot
                       {post.snapshots === 1 ? "" : "s"}
-                      {post.growth && post.growth.impressions !== 0 && (
-                        <span className={post.growth.impressions > 0 ? " text-emerald-500" : " text-red-500"}>
-                          {" "}({post.growth.impressions > 0 ? "+" : ""}
-                          {fmt(post.growth.impressions)} since first capture)
+                      {post.growth && growth !== 0 && (
+                        <span className={growth > 0 ? " text-emerald-500" : " text-red-500"}>
+                          {" "}({growth > 0 ? "+" : ""}
+                          {fmt(growth)} since first capture)
                         </span>
                       )}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
-                    <Sparkline values={(post.history ?? []).map((h) => h.impressions)} />
+                    <Sparkline values={(post.history ?? []).map((h) => h[metric])} />
                     <span className="flex items-center gap-1">
                       <Heart className="h-3 w-3" /> {fmt(s.likes)}
                     </span>
