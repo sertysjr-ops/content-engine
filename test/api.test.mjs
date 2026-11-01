@@ -369,6 +369,75 @@ try {
   );
   await api(`/api/posts/${rp.id}`, { method: "DELETE" });
 
+  // --- publish queue: due scheduled posts flip to published ---
+  const pastDue = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Queue probe: overdue",
+      content: "should have gone out yesterday",
+      platform: "twitter",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() - 86400000).toISOString(), // yesterday
+    }),
+  });
+  const future = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Queue probe: future",
+      content: "not yet",
+      platform: "twitter",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() + 86400000).toISOString(), // tomorrow
+    }),
+  });
+  const overdue = pastDue.body.post;
+  const notYet = future.body.post;
+
+  const dueBefore = await api("/api/publish/due");
+  check(
+    "GET /api/publish/due lists overdue, not future",
+    dueBefore.status === 200 &&
+      dueBefore.body.due?.some((p) => p.id === overdue.id) &&
+      !dueBefore.body.due?.some((p) => p.id === notYet.id)
+  );
+  check(
+    "preview does not mutate (post still scheduled)",
+    dueBefore.body.due?.find((p) => p.id === overdue.id)?.status === "scheduled"
+  );
+
+  const drained = await api("/api/publish/due", { method: "POST" });
+  check(
+    "POST /api/publish/due drains everything the preview listed",
+    drained.status === 200 &&
+      drained.body.count === dueBefore.body.count &&
+      drained.body.published?.some((p) => p.id === overdue.id) &&
+      !drained.body.published?.some((p) => p.id === notYet.id) &&
+      drained.body.published?.every((p) => p.status === "published"),
+    `count=${drained.body.count} preview=${dueBefore.body.count}`
+  );
+
+  const dueAfter = await api("/api/publish/due");
+  check("queue empty after drain", dueAfter.body.count === 0);
+
+  const drainAgain = await api("/api/publish/due", { method: "POST" });
+  check(
+    "draining an empty queue is a no-op",
+    drainAgain.status === 200 && drainAgain.body.count === 0
+  );
+
+  const futureStill = await api(`/api/posts?status=scheduled`);
+  check(
+    "future post untouched by the drain",
+    futureStill.body.posts?.some(
+      (p) => p.id === notYet.id && p.status === "scheduled"
+    )
+  );
+
+  await api(`/api/posts/${overdue.id}`, { method: "DELETE" });
+  await api(`/api/posts/${notYet.id}`, { method: "DELETE" });
+  const stats5 = await api("/api/stats");
+  check("post store restored to 6 after queue probes", stats5.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");

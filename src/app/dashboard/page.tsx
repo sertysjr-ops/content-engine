@@ -9,6 +9,7 @@ import {
   BarChart3,
   Calendar,
   FileText,
+  Rocket,
   TrendingUp,
   Users,
   Zap,
@@ -35,17 +36,38 @@ type Post = {
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [recent, setRecent] = useState<Post[]>([]);
+  const [due, setDue] = useState<Post[]>([]);
+  const [publishing, setPublishing] = useState(false);
+  const [justPublished, setJustPublished] = useState<number | null>(null);
+
+  async function refresh() {
+    const [s, p, d] = await Promise.all([
+      fetch("/api/stats").then((r) => r.json()),
+      fetch("/api/posts").then((r) => r.json()),
+      fetch("/api/publish/due").then((r) => r.json()),
+    ]);
+    setStats(s);
+    setRecent((p.posts ?? []).slice(0, 5));
+    setDue(d.due ?? []);
+  }
 
   useEffect(() => {
-    (async () => {
-      const [s, p] = await Promise.all([
-        fetch("/api/stats").then((r) => r.json()),
-        fetch("/api/posts").then((r) => r.json()),
-      ]);
-      setStats(s);
-      setRecent((p.posts ?? []).slice(0, 5));
-    })();
+    refresh();
   }, []);
+
+  async function publishNow() {
+    setPublishing(true);
+    try {
+      const r = await fetch("/api/publish/due", { method: "POST" }).then((r) =>
+        r.json()
+      );
+      setJustPublished(r.count ?? 0);
+      await refresh();
+      setTimeout(() => setJustPublished(null), 4000);
+    } finally {
+      setPublishing(false);
+    }
+  }
 
   const cards = [
     { title: "Total Posts", value: String(stats?.total ?? "—"), icon: FileText },
@@ -85,6 +107,52 @@ export default function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {(due.length > 0 || justPublished !== null) && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Rocket className="h-4 w-4" />
+              Publish queue — {due.length} post{due.length === 1 ? "" : "s"} due
+            </CardTitle>
+            {due.length > 0 && (
+              <button
+                onClick={publishNow}
+                disabled={publishing}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {publishing ? "Publishing…" : "Publish now"}
+              </button>
+            )}
+          </CardHeader>
+          <CardContent>
+            {justPublished !== null && (
+              <p className="text-sm text-green-500 mb-2">
+                🚀 Published {justPublished} post{justPublished === 1 ? "" : "s"}!
+              </p>
+            )}
+            {due.length > 0 && (
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {due.slice(0, 3).map((p) => (
+                  <li key={p.id} className="flex items-center gap-2">
+                    <Badge variant="secondary">{p.platform}</Badge>
+                    <span className="truncate">{p.title}</span>
+                    <span className="ml-auto shrink-0 text-xs">
+                      due{" "}
+                      {p.scheduledAt
+                        ? format(parseISO(p.scheduledAt), "MMM d, HH:mm")
+                        : "—"}
+                    </span>
+                  </li>
+                ))}
+                {due.length > 3 && (
+                  <li className="text-xs">…and {due.length - 3} more</li>
+                )}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="posts" className="space-y-4">
         <TabsList>

@@ -188,6 +188,35 @@ export function deletePost(id: string): boolean {
   return true;
 }
 
+/** Scheduled posts whose time has come (scheduledAt <= now). */
+export function listDuePosts(now: Date = new Date()): Post[] {
+  const iso = now.toISOString();
+  return readAll()
+    .filter((p) => p.status === "scheduled" && p.scheduledAt && p.scheduledAt <= iso)
+    .sort((a, b) => (a.scheduledAt! < b.scheduledAt! ? -1 : 1));
+}
+
+/**
+ * Auto-publish queue: flip every due scheduled post to "published".
+ * Returns the posts that were flipped (empty array when nothing is due).
+ * Real platform posting (Twitter/LinkedIn APIs) would hook in here later —
+ * for now "publishing" means the status flip + publishedAt timestamp.
+ */
+export function publishDuePosts(now: Date = new Date()): Post[] {
+  const posts = readAll();
+  const iso = now.toISOString();
+  const flipped: Post[] = [];
+  for (const p of posts) {
+    if (p.status === "scheduled" && p.scheduledAt && p.scheduledAt <= iso) {
+      p.status = "published";
+      p.updatedAt = iso;
+      flipped.push({ ...p });
+    }
+  }
+  if (flipped.length > 0) writeAll(posts);
+  return flipped;
+}
+
 export type Stats = {
   total: number;
   draft: number;
