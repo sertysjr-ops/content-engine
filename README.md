@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Content Engine
 
-## Getting Started
+AI-powered content operations dashboard for creators: generate, schedule,
+recycle, and measure posts across X, LinkedIn, threads, and blog — all
+from one place. Local-first (Ollama for generation, JSON file store for
+persistence), deployable as a single Docker container.
 
-First, run the development server:
+## Features
+
+- **AI Studio** — generate platform-native posts (5 platforms × 5 tones)
+  via a local Ollama model; one-click "save to library"
+- **Fill my week** — turn one niche topic into 5 varied, deduplicated
+  posts auto-scheduled across the next 7 days
+- **Content recycling** — mint 3 fresh-angle drafts from any post
+  (contrarian / how-to / story / listicle / myth-bust rotation), with
+  `recycledFrom` lineage; variants can be recycled again
+- **Recycle Radar** — engagement-driven ranking of what to refresh next
+  (declining impressions + high reach + age scoring)
+- **Auto-publish queue** — `GET /api/publish/due` previews overdue
+  scheduled posts, `POST` drains them (scheduled → published); cron-friendly
+- **Analytics** — real engagement snapshots per post (manual capture or
+  CSV import), KPIs, sparklines with metric switcher, growth badges
+- **Calendar** — month grid with scheduled-post chips
+
+## Stack
+
+Next.js (App Router) · React 19 · Tailwind · Base UI · zero-dep JSON file
+store (`data/`, atomic writes, Supabase-swappable interface) · Ollama
+(`qwen3.5:4b`, `think: false`) for all generation.
+
+## Local dev
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+AI features need [Ollama](https://ollama.com) running locally with a model
+pulled (`ollama pull qwen3.5:4b`). Without it the UI still works; only the
+generation endpoints fail.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Test
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+node test/api.test.mjs   # boots `next start`, runs 44 API/UI checks
+```
 
-## Learn More
+## Deploy (Docker / Railway / Render / Fly)
 
-To learn more about Next.js, take a look at the following resources:
+The JSON store needs a writable filesystem, so Vercel serverless is out —
+use a container host. The repo ships a multi-stage `Dockerfile`
+(Next.js standalone output, runs as non-root):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+docker build -t content-engine .
+docker run -p 3000:3000 -v content-data:/app/data content-engine
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `DATA_DIR` | `/app/data` (Docker) / `./data` (dev) | Where `posts.json` + `engagements.json` live — **mount a volume here** |
+| `PORT` | `3000` | Listen port |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama host for AI generation (optional in prod) |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Generation model |
 
-## Deploy on Vercel
+**Railway:** new project → deploy from repo (Dockerfile auto-detected) →
+add a volume mounted at `/app/data` → done. Optionally add a cron job
+hitting `POST /api/publish/due` every 15 min to auto-publish.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## API sketch
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+GET/POST   /api/posts              list (filters: q, status, platform) / create
+PATCH/DELETE /api/posts/[id]       update (e.g. status advance) / delete
+GET        /api/stats              dashboard KPIs
+POST       /api/generate           single-post generation
+POST       /api/generate-week      5 varied posts, auto-scheduled
+POST       /api/recycle            {postId} → 3 fresh-angle drafts
+GET        /api/recycle-suggest    ranked refresh candidates
+GET/POST   /api/engagement         capture snapshots (single + batch)
+POST       /api/engagement/import  CSV metrics import
+GET/POST   /api/publish/due        preview / drain the publish queue
+```

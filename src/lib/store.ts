@@ -29,7 +29,9 @@ export type Post = {
   updatedAt: string;
 };
 
-const DATA_DIR = path.join(process.cwd(), "data");
+// DATA_DIR env override: point at a mounted volume on Railway/Render so
+// posts survive redeploys (default stays ./data for local dev).
+const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 const DATA_FILE = path.join(DATA_DIR, "posts.json");
 
 function seedPosts(): Post[] {
