@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listDuePosts, publishDuePosts } from "@/lib/store";
+import { dispatchMany } from "@/lib/webhooks";
 
 export const runtime = "nodejs"; // needs fs — not edge-compatible
 
@@ -8,8 +9,9 @@ export const runtime = "nodejs"; // needs fs — not edge-compatible
  *
  * GET  /api/publish/due → preview: scheduled posts whose time has passed,
  *                         without touching them ({ due: Post[], count }).
- * POST /api/publish/due → flip all due posts to "published"
- *                         ({ published: Post[], count }).
+ * POST /api/publish/due → flip all due posts to "published", then fan each
+ *                         out to PUBLISH_WEBHOOK_URLS (n8n/Make/Zapier-ready)
+ *                         ({ published, count, webhooks: {delivered, failed} }).
  *
  * Wire POST to a cron (Vercel Cron / system crontab hitting the URL) and
  * the queue drains itself. Platform API posting plugs into publishDuePosts
@@ -22,5 +24,14 @@ export async function GET() {
 
 export async function POST() {
   const published = publishDuePosts();
-  return NextResponse.json({ published, count: published.length });
+  const webhooks = await dispatchMany(published);
+  return NextResponse.json({
+    published,
+    count: published.length,
+    webhooks: {
+      delivered: webhooks.delivered,
+      failed: webhooks.failed,
+      results: webhooks.results,
+    },
+  });
 }

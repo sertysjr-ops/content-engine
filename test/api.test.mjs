@@ -5,10 +5,33 @@
  * cycle + stats, then kills the server. Run: node test/api.test.mjs
  */
 import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 
 const PORT = 3311;
 const BASE = `http://localhost:${PORT}`;
+
+// Mock webhook receiver: captures raw bodies + headers so we can verify
+// payloads and HMAC signatures. A second, dead URL is also configured so
+// every drain exercises failure isolation too.
+const HOOK_PORT = 3312;
+const HOOK_SECRET = "whsec-test";
+const received = [];
+const hookServer = createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    received.push({
+      url: req.url,
+      headers: req.headers,
+      raw: Buffer.concat(chunks).toString("utf8"),
+    });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("{}");
+  });
+});
+await new Promise((r) => hookServer.listen(HOOK_PORT, r));
 
 async function api(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
@@ -44,6 +67,11 @@ function check(name, cond, extra = "") {
 
 const server = spawn("npx", ["next", "start", "-p", String(PORT)], {
   stdio: ["ignore", "pipe", "pipe"],
+  env: {
+    ...process.env,
+    PUBLISH_WEBHOOK_URLS: `http://localhost:${HOOK_PORT}/hook?token=supersecret,http://localhost:33999/dead`,
+    PUBLISH_WEBHOOK_SECRET: HOOK_SECRET,
+  },
 });
 let serverLog = "";
 server.stdout.on("data", (d) => (serverLog += d));
@@ -438,6 +466,65 @@ try {
   const stats5 = await api("/api/stats");
   check("post store restored to 6 after queue probes", stats5.body.total === 6);
 
+  // --- webhooks: published posts fan out to PUBLISH_WEBHOOK_URLS ---
+  received.length = 0; // ignore deliveries fired by the queue probes above
+  const hookProbe = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Webhook probe: overdue",
+      content: "fan me out",
+      platform: "linkedin",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() - 3600000).toISOString(),
+    }),
+  });
+  const hp = hookProbe.body.post;
+  const hookDrain = await api("/api/publish/due", { method: "POST" });
+  check(
+    "drain reports webhook fan-out (1 delivered, 1 failed-dead-url)",
+    hookDrain.status === 200 &&
+      hookDrain.body.webhooks?.delivered === 1 &&
+      hookDrain.body.webhooks?.failed === 1,
+    `got ${JSON.stringify(hookDrain.body.webhooks)}`
+  );
+  check(
+    "mock receiver got post.published with the probe post",
+    received.length === 1 &&
+      (() => {
+        const payload = JSON.parse(received[0].raw);
+        return (
+          payload.event === "post.published" &&
+          payload.post?.id === hp.id &&
+          payload.post?.title === "Webhook probe: overdue" &&
+          payload.post?.status === "published"
+        );
+      })(),
+    `received=${received.length}`
+  );
+  check(
+    "HMAC signature header verifies against the raw body",
+    received[0]?.headers["x-content-engine-signature"] ===
+      "sha256=" + createHmac("sha256", HOOK_SECRET).update(received[0].raw).digest("hex")
+  );
+
+  const whStatus = await api("/api/publish/webhooks");
+  check(
+    "GET /api/publish/webhooks: config + delivery log, secrets stripped",
+    whStatus.status === 200 &&
+      whStatus.body.configured?.includes(`http://localhost:${HOOK_PORT}/hook`) &&
+      !whStatus.body.configured?.some((u) => u.includes("supersecret")) &&
+      whStatus.body.deliveries?.some(
+        (d) => d.postId === hp.id && d.ok === true && d.httpStatus === 200
+      ) &&
+      whStatus.body.deliveries?.some(
+        (d) => d.postId === hp.id && d.ok === false && d.error
+      ) &&
+      !whStatus.body.deliveries?.some((d) => d.url.includes("supersecret")),
+    `configured=${JSON.stringify(whStatus.body.configured)}`
+  );
+
+  await api(`/api/posts/${hp.id}`, { method: "DELETE" });
+
   // --- digest: email-ready briefing from existing data ---
   const digestJson = await api("/api/digest?format=json");
   check(
@@ -537,4 +624,5 @@ try {
   server.kill("SIGTERM");
   await delay(500);
   server.kill("SIGKILL");
+  hookServer.close();
 }

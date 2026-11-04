@@ -63,6 +63,8 @@ docker run -p 3000:3000 -v content-data:/app/data content-engine
 | `PORT` | `3000` | Listen port |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama host for AI generation (optional in prod) |
 | `OLLAMA_MODEL` | `qwen3.5:4b` | Generation model |
+| `PUBLISH_WEBHOOK_URLS` | _(none)_ | Comma-separated URLs — every published post is POSTed here as `{event:"post.published", post}` (point at n8n/Make/Zapier to reach real platforms without API keys in this repo) |
+| `PUBLISH_WEBHOOK_SECRET` | _(none)_ | If set, deliveries carry `X-Content-Engine-Signature: sha256=<hmac of body>` |
 
 **Railway:** new project → deploy from repo (Dockerfile auto-detected) →
 add a volume mounted at `/app/data` → done. Optionally add a cron job
