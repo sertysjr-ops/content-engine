@@ -9,6 +9,7 @@ import {
   BarChart3,
   Calendar,
   FileText,
+  Mail,
   Rocket,
   TrendingUp,
   Users,
@@ -153,6 +154,30 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            Weekly digest
+          </CardTitle>
+          <a
+            href="/api/digest"
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-accent"
+          >
+            Open email-ready digest
+          </a>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Recycle radar picks, publish queue, and the week ahead — rendered
+            as paste-ready email HTML. Cron-friendly:{" "}
+            <code className="text-xs">curl localhost:3000/api/digest</code>
+          </p>
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="posts" className="space-y-4">
         <TabsList>

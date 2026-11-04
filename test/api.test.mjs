@@ -438,6 +438,100 @@ try {
   const stats5 = await api("/api/stats");
   check("post store restored to 6 after queue probes", stats5.body.total === 6);
 
+  // --- digest: email-ready briefing from existing data ---
+  const digestJson = await api("/api/digest?format=json");
+  check(
+    "digest json: subject + all sections present",
+    digestJson.status === 200 &&
+      typeof digestJson.body.subject === "string" &&
+      digestJson.body.subject.includes("Content digest") &&
+      Array.isArray(digestJson.body.radar) &&
+      Array.isArray(digestJson.body.dueNow) &&
+      Array.isArray(digestJson.body.upcoming) &&
+      typeof digestJson.body.stats?.total === "number" &&
+      typeof digestJson.body.engagement?.postsTracked === "number"
+  );
+
+  // radar probe again so the digest has a known declining pick
+  const digPost = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Digest probe: fading banger",
+      content: "probe",
+      platform: "twitter",
+      status: "published",
+    }),
+  });
+  const dp = digPost.body.post;
+  await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: dp.id, likes: 50, impressions: 3000 }),
+  });
+  await api("/api/engagement", {
+    method: "POST",
+    body: JSON.stringify({ postId: dp.id, likes: 51, impressions: 900 }),
+  });
+  const digDue = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Digest probe: overdue",
+      content: "late",
+      platform: "linkedin",
+      status: "scheduled",
+      scheduledAt: new Date(Date.now() - 3600000).toISOString(),
+    }),
+  });
+
+  const dj2 = await api("/api/digest?format=json");
+  check(
+    "digest radar tops with the declining probe",
+    dj2.body.radar?.[0]?.postId === dp.id &&
+      dj2.body.radar[0].signals.includes("declining"),
+    `got ${dj2.body.radar?.[0]?.title}`
+  );
+  check(
+    "digest dueNow contains the overdue probe, upcoming excludes it",
+    dj2.body.dueNow?.some((q) => q.postId === digDue.body.post.id) &&
+      !dj2.body.upcoming?.some((q) => q.postId === digDue.body.post.id)
+  );
+
+  const htmlRes = await fetch(`${BASE}/api/digest`);
+  const html = await htmlRes.text();
+  check(
+    "digest html: text/html, escapes + includes probe titles",
+    htmlRes.headers.get("content-type")?.includes("text/html") &&
+      html.includes("Digest probe: fading banger") &&
+      html.includes("Digest probe: overdue") &&
+      html.includes("Content Engine digest")
+  );
+  check(
+    "digest html escapes injected markup in titles",
+    await (async () => {
+      const evil = await api("/api/posts", {
+        method: "POST",
+        body: JSON.stringify({
+          title: '<img src=x onerror=alert(1)> "quoted"',
+          content: "xss",
+          platform: "twitter",
+          status: "scheduled",
+          scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+        }),
+      });
+      const h = await (await fetch(`${BASE}/api/digest`)).text();
+      await api(`/api/posts/${evil.body.post.id}`, { method: "DELETE" });
+      return (
+        !h.includes("<img src=x") &&
+        h.includes("&lt;img src=x") &&
+        h.includes("&quot;quoted&quot;")
+      );
+    })()
+  );
+
+  await api(`/api/posts/${dp.id}`, { method: "DELETE" });
+  await api(`/api/posts/${digDue.body.post.id}`, { method: "DELETE" });
+  const stats6 = await api("/api/stats");
+  check("post store restored to 6 after digest probes", stats6.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
