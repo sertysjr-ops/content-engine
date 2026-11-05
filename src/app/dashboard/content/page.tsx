@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Recycle,
   BarChart3,
+  Sparkles,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
@@ -53,6 +54,20 @@ const platformLabel: Record<string, string> = {
   youtube: "YouTube",
 };
 
+type Critique = {
+  score: number;
+  verdict: string;
+  strengths: string[];
+  fixes: string[];
+  hookRewrite: string;
+};
+
+function scoreColor(score: number): string {
+  if (score >= 8) return "text-emerald-500 border-emerald-500/40";
+  if (score >= 5) return "text-amber-500 border-amber-500/40";
+  return "text-red-500 border-red-500/40";
+}
+
 export default function ContentPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
@@ -68,6 +83,9 @@ export default function ContentPage() {
   const [metricsFor, setMetricsFor] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<Record<string, string>>({});
   const [metricsFlash, setMetricsFlash] = useState<Record<string, string>>({});
+  const [critiqueFor, setCritiqueFor] = useState<string | null>(null);
+  const [critiques, setCritiques] = useState<Record<string, Critique>>({});
+  const [critiquing, setCritiquing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -151,6 +169,38 @@ export default function ContentPage() {
       }
     } finally {
       setRecycling(null);
+    }
+  }
+
+  async function critiquePost(post: Post) {
+    if (critiqueFor === post.id) {
+      setCritiqueFor(null); // toggle closed
+      return;
+    }
+    setCritiqueFor(post.id);
+    if (critiques[post.id]) return; // cached for this session
+    setCritiquing(post.id);
+    try {
+      const res = await fetch("/api/critique", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: post.id }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCritiques((c) => ({
+          ...c,
+          [post.id]: {
+            score: data.score,
+            verdict: data.verdict,
+            strengths: data.strengths ?? [],
+            fixes: data.fixes ?? [],
+            hookRewrite: data.hookRewrite ?? "",
+          },
+        }));
+      }
+    } finally {
+      setCritiquing(null);
     }
   }
 
@@ -354,6 +404,19 @@ export default function ContentPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    onClick={() => critiquePost(post)}
+                    disabled={critiquing === post.id}
+                    title="AI critique: score + fixes before you publish"
+                  >
+                    {critiquing === post.id ? (
+                      <RefreshCw className="h-4 w-4 animate-spin text-fuchsia-500" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 text-muted-foreground hover:text-fuchsia-500" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => recyclePost(post)}
                     disabled={recycling === post.id}
                     title="AI-recycle: mint 3 fresh angles as drafts"
@@ -389,6 +452,63 @@ export default function ContentPage() {
                 <p className="line-clamp-2 text-sm text-muted-foreground">
                   {post.content}
                 </p>
+              </CardContent>
+            )}
+            {critiqueFor === post.id && (
+              <CardContent className="border-t pt-4">
+                {critiquing === post.id && (
+                  <p className="text-sm text-muted-foreground">
+                    ✨ Critiquing with the local model…
+                  </p>
+                )}
+                {critiques[post.id] && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`flex h-11 w-11 items-center justify-center rounded-full border-2 text-lg font-bold ${scoreColor(critiques[post.id].score)}`}
+                      >
+                        {critiques[post.id].score}
+                      </span>
+                      <p className="text-sm italic text-muted-foreground">
+                        {critiques[post.id].verdict}
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {critiques[post.id].strengths.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-500">
+                            What works
+                          </p>
+                          <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                            {critiques[post.id].strengths.map((s, i) => (
+                              <li key={i}>{s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {critiques[post.id].fixes.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-500">
+                            Fix before publishing
+                          </p>
+                          <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                            {critiques[post.id].fixes.map((f, i) => (
+                              <li key={i}>{f}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                    {critiques[post.id].hookRewrite && (
+                      <div className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-500/5 p-3">
+                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fuchsia-500">
+                          Stronger hook
+                        </p>
+                        <p className="text-sm">{critiques[post.id].hookRewrite}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </CardContent>
             )}
             {metricsFor === post.id && (

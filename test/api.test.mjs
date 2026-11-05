@@ -619,6 +619,70 @@ try {
   const stats6 = await api("/api/stats");
   check("post store restored to 6 after digest probes", stats6.body.total === 6);
 
+  // --- critique: AI pre-publish review (live model) ---
+  const adhoc = await api("/api/critique", {
+    method: "POST",
+    body: JSON.stringify({
+      content: "just shipped my new app!! its really cool, check it out",
+      platform: "twitter",
+    }),
+  });
+  check(
+    "POST /api/critique ad-hoc: score 1-10 + verdict + lists + hook rewrite",
+    adhoc.status === 200 &&
+      Number.isInteger(adhoc.body.score) &&
+      adhoc.body.score >= 1 && adhoc.body.score <= 10 &&
+      typeof adhoc.body.verdict === "string" && adhoc.body.verdict.length > 5 &&
+      Array.isArray(adhoc.body.strengths) &&
+      Array.isArray(adhoc.body.fixes) &&
+      typeof adhoc.body.hookRewrite === "string" &&
+      adhoc.body.platform === "twitter",
+    `status=${adhoc.status} body=${JSON.stringify(adhoc.body).slice(0, 200)}`
+  );
+  check(
+    "critique parsed the model's JSON cleanly (no fallback verdict)",
+    adhoc.body.parsedCleanly === true &&
+      !adhoc.body.verdict.includes("phrased them oddly") &&
+      adhoc.body.strengths.length >= 1 && adhoc.body.fixes.length >= 1,
+    `verdict=${adhoc.body.verdict}`
+  );
+
+  // by post id: platform + postId echo
+  const critTarget = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Critique probe",
+      content: "10 lessons from 10 years of writing code every single day",
+      platform: "linkedin",
+      status: "draft",
+    }),
+  });
+  const byId = await api("/api/critique", {
+    method: "POST",
+    body: JSON.stringify({ id: critTarget.body.post.id }),
+  });
+  check(
+    "POST /api/critique by id: postId + platform echoed, valid score",
+    byId.status === 200 &&
+      byId.body.postId === critTarget.body.post.id &&
+      byId.body.platform === "linkedin" &&
+      byId.body.score >= 1 && byId.body.score <= 10,
+    `status=${byId.status} body=${JSON.stringify(byId.body).slice(0, 160)}`
+  );
+  await api(`/api/posts/${critTarget.body.post.id}`, { method: "DELETE" });
+
+  const critMissing = await api("/api/critique", {
+    method: "POST",
+    body: JSON.stringify({ id: "does-not-exist" }),
+  });
+  check("critique unknown post id → 404", critMissing.status === 404);
+
+  const critEmpty = await api("/api/critique", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  check("critique with neither id nor content → 400", critEmpty.status === 400);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
