@@ -86,6 +86,21 @@ export default function ContentPage() {
   const [critiqueFor, setCritiqueFor] = useState<string | null>(null);
   const [critiques, setCritiques] = useState<Record<string, Critique>>({});
   const [critiquing, setCritiquing] = useState<string | null>(null);
+  const [applyingHook, setApplyingHook] = useState<string | null>(null);
+  const [hookFlash, setHookFlash] = useState<Record<string, string>>({});
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState<
+    | {
+        post: { id: string; title: string; platform: string; status: string };
+        score: number;
+        verdict: string;
+        strengths: string[];
+        fixes: string[];
+        hookRewrite: string;
+        error?: string;
+      }[]
+    | null
+  >(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -202,6 +217,83 @@ export default function ContentPage() {
     } finally {
       setCritiquing(null);
     }
+  }
+
+  async function applyHook(post: Post) {
+    const hook = critiques[post.id]?.hookRewrite?.trim();
+    if (!hook) return;
+    setApplyingHook(post.id);
+    try {
+      // swap the opening line for the stronger hook, keep the rest
+      const nl = post.content.indexOf("\n");
+      const newContent = nl < 0 ? hook : hook + post.content.slice(nl);
+      const res = await fetch(`/api/posts/${post.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: newContent }),
+      });
+      if (res.ok) {
+        // stale cache: the critique was scored against the old hook
+        setCritiques((c) => {
+          const next = { ...c };
+          delete next[post.id];
+          return next;
+        });
+        setHookFlash((f) => ({ ...f, [post.id]: "hook applied ✨" }));
+        setTimeout(() => {
+          setHookFlash((f) => {
+            const n = { ...f };
+            delete n[post.id];
+            return n;
+          });
+        }, 4000);
+        await load();
+      }
+    } finally {
+      setApplyingHook(null);
+    }
+  }
+
+  async function reviewDrafts() {
+    setReviewing(true);
+    setReviewQueue(null);
+    try {
+      const res = await fetch("/api/critique/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "draft", limit: 8 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setReviewQueue(data.results ?? []);
+      }
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  function openFromQueue(postId: string) {
+    const row = reviewQueue?.find((r) => r.post.id === postId);
+    const post = posts.find((p) => p.id === postId);
+    if (!row || !post) return;
+    if (row.error) return; // nothing cached to show; let them re-run single
+    // prime the cache so the panel opens instantly without a re-fetch
+    setCritiques((c) =>
+      c[postId]
+        ? c
+        : {
+            ...c,
+            [postId]: {
+              score: row.score,
+              verdict: row.verdict,
+              strengths: row.strengths,
+              fixes: row.fixes,
+              hookRewrite: row.hookRewrite,
+            },
+          }
+    );
+    setCritiqueFor(postId);
+    setReviewQueue(null);
   }
 
   async function saveMetrics(post: Post) {
@@ -325,7 +417,88 @@ export default function ContentPage() {
             <SelectItem value="draft">Drafts</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          onClick={reviewDrafts}
+          disabled={reviewing}
+          title="AI-critique every draft, sorted worst-first — your fix queue"
+        >
+          {reviewing ? (
+            <RefreshCw className="mr-2 h-4 w-4 animate-spin text-fuchsia-500" />
+          ) : (
+            <Sparkles className="mr-2 h-4 w-4 text-fuchsia-500" />
+          )}
+          {reviewing ? "Reviewing…" : "Review drafts"}
+        </Button>
       </div>
+
+      {reviewing && (
+        <Card>
+          <CardContent className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+            ✨ Scoring all drafts with the local model — worst offenders will
+            float to the top…
+          </CardContent>
+        </Card>
+      )}
+      {reviewQueue && (
+        <Card className="border-fuchsia-500/30">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">
+                Draft review queue — worst first
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setReviewQueue(null)}
+                title="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {reviewQueue.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No drafts with content to critique.
+              </p>
+            )}
+            {reviewQueue.map((row) => (
+              <button
+                key={row.post.id}
+                onClick={() => openFromQueue(row.post.id)}
+                disabled={!!row.error}
+                className="flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:border-fuchsia-500/40 disabled:opacity-60"
+              >
+                {row.error ? (
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-muted text-xs text-muted-foreground">
+                    ✕
+                  </span>
+                ) : (
+                  <span
+                    className={`flex h-9 w-9 items-center justify-center rounded-full border-2 text-sm font-bold ${scoreColor(row.score)}`}
+                  >
+                    {row.score}
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {row.post.title}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {row.error ?? row.verdict}
+                  </p>
+                </div>
+                {!row.error && row.fixes.length > 0 && (
+                  <Badge variant="outline" className="shrink-0 text-amber-500">
+                    {row.fixes.length} fixes
+                  </Badge>
+                )}
+              </button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4">
         {loading && (
@@ -381,6 +554,11 @@ export default function ContentPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {hookFlash[post.id] && (
+                    <span className="text-xs text-fuchsia-500">
+                      {hookFlash[post.id]}
+                    </span>
+                  )}
                   {metricsFlash[post.id] && (
                     <span className="text-xs text-emerald-500">{metricsFlash[post.id]}</span>
                   )}
@@ -505,6 +683,23 @@ export default function ContentPage() {
                           Stronger hook
                         </p>
                         <p className="text-sm">{critiques[post.id].hookRewrite}</p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-2 border-fuchsia-500/40 text-fuchsia-500 hover:bg-fuchsia-500/10"
+                          disabled={applyingHook === post.id}
+                          onClick={() => applyHook(post)}
+                          title="Replace this post's opening line with the stronger hook"
+                        >
+                          {applyingHook === post.id ? (
+                            <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Check className="mr-1 h-3 w-3" />
+                          )}
+                          {applyingHook === post.id
+                            ? "Applying…"
+                            : "Apply as opening line"}
+                        </Button>
                       </div>
                     )}
                   </div>

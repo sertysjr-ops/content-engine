@@ -683,6 +683,137 @@ try {
   });
   check("critique with neither id nor content → 400", critEmpty.status === 400);
 
+  // --- batch critique: the draft review queue (live model) ---
+  const batchProbe1 = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Batch probe weak",
+      content: "my app is out. its cool i guess",
+      platform: "twitter",
+      status: "draft",
+    }),
+  });
+  const batchProbe2 = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Batch probe strong",
+      content:
+        "I deleted 80% of my app's features. Revenue doubled.\n\nHere's what I kept and why subtraction beats addition:",
+      platform: "twitter",
+      status: "draft",
+    }),
+  });
+
+  const critBatch = await api("/api/critique/batch", {
+    method: "POST",
+    body: JSON.stringify({ status: "draft", limit: 8 }),
+  });
+  const batchRows = Array.isArray(critBatch.body.results)
+    ? critBatch.body.results
+    : [];
+  const probeRows = batchRows.filter(
+    (r) =>
+      r.post?.id === batchProbe1.body.post.id ||
+      r.post?.id === batchProbe2.body.post.id
+  );
+  check(
+    "POST /api/critique/batch: both probe drafts scored, shape intact",
+    critBatch.status === 200 &&
+      probeRows.length === 2 &&
+      probeRows.every(
+        (r) =>
+          Number.isInteger(r.score) &&
+          r.score >= 1 &&
+          r.score <= 10 &&
+          typeof r.verdict === "string" &&
+          Array.isArray(r.fixes) &&
+          !r.error
+      ),
+    `status=${batch.status} probes=${JSON.stringify(probeRows).slice(0, 200)}`
+  );
+  const scoredRows = batchRows.filter((r) => !r.error);
+  const sortedWorstFirst = scoredRows.every(
+    (r, i) => i === 0 || scoredRows[i - 1].score <= r.score
+  );
+  check(
+    "batch results sorted worst-first (failures sink to bottom)",
+    sortedWorstFirst &&
+      typeof critBatch.body.count === "number" &&
+      critBatch.body.count === scoredRows.length,
+    `scores=${scoredRows.map((r) => r.score).join(",")}`
+  );
+
+  const batchLimit = await api("/api/critique/batch", {
+    method: "POST",
+    body: JSON.stringify({ status: "draft", limit: 1 }),
+  });
+  check(
+    "batch honors limit=1 (exactly one post critiqued, capped LLM spend)",
+    batchLimit.status === 200 &&
+      Array.isArray(batchLimit.body.results) &&
+      batchLimit.body.results.length === 1,
+    `status=${batchLimit.status} n=${batchLimit.body.results?.length}`
+  );
+
+  const batchBadStatus = await api("/api/critique/batch", {
+    method: "POST",
+    body: JSON.stringify({ status: "banana", limit: 1 }),
+  });
+  check(
+    "batch with invalid status falls back to drafts (no crash)",
+    batchBadStatus.status === 200 &&
+      batchBadStatus.body.status === "draft" &&
+      Array.isArray(batchBadStatus.body.results),
+    `status=${batchBadStatus.status} body.status=${batchBadStatus.body.status}`
+  );
+
+  // --- apply hook rewrite: swap the opening line, keep the rest ---
+  const applyProbe = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Hook probe",
+      content: "weak opener nobody reads\nsecond line stays\nthird line too",
+      platform: "twitter",
+      status: "draft",
+    }),
+  });
+  const hookCrit = await api("/api/critique", {
+    method: "POST",
+    body: JSON.stringify({ id: applyProbe.body.post.id }),
+  });
+  if (hookCrit.status === 200 && hookCrit.body.hookRewrite?.trim()) {
+    const hook = hookCrit.body.hookRewrite.trim();
+    // mirror the page's swap: first line out, hook in, rest untouched
+    const original = applyProbe.body.post.content;
+    const patched =
+      hook + original.slice(original.indexOf("\n"));
+    const apply = await api(`/api/posts/${applyProbe.body.post.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content: patched }),
+    });
+    const after = await api(`/api/posts`);
+    const updated = (after.body.posts ?? []).find(
+      (p) => p.id === applyProbe.body.post.id
+    );
+    check(
+      "apply hook: first line becomes the rewrite, rest of the post preserved",
+      apply.status === 200 &&
+        updated?.content.split("\n")[0] === hook &&
+        updated?.content.includes("second line stays") &&
+        updated?.content.includes("third line too"),
+      `first=${updated?.content.split("\n")[0]?.slice(0, 80)}`
+    );
+  } else {
+    check("apply hook: critique returned a usable hookRewrite", false,
+      `status=${hookCrit.status} hook=${hookCrit.body?.hookRewrite}`);
+  }
+
+  for (const probe of [batchProbe1, batchProbe2, applyProbe]) {
+    await api(`/api/posts/${probe.body.post.id}`, { method: "DELETE" });
+  }
+  const stats7 = await api("/api/stats");
+  check("post store restored to 6 after critique probes", stats7.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
