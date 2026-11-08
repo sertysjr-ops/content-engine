@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sparkles, Copy, Check, RefreshCw, AlertCircle, Save, CalendarPlus } from "lucide-react";
+import { Sparkles, Copy, Check, RefreshCw, AlertCircle, Save, CalendarPlus, Lightbulb, ArrowRight, X } from "lucide-react";
 
 const platforms = [
   { value: "twitter", label: "Twitter / X post" },
@@ -45,6 +45,77 @@ export default function AiStudioPage() {
     { id: string; title: string; platform: string; scheduledAt: string }[]
   >([]);
   const [weekError, setWeekError] = useState<string | null>(null);
+
+  // --- Ideas inbox state ---
+  type Idea = {
+    id: string;
+    text: string;
+    platform: string;
+    topic: string;
+    usedBy: string | null;
+  };
+  const [ideaTopic, setIdeaTopic] = useState("");
+  const [ideaCount, setIdeaCount] = useState("5");
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [ideasError, setIdeasError] = useState<string | null>(null);
+  const [draftingId, setDraftingId] = useState<string | null>(null);
+
+  const loadIdeas = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ideas");
+      const data = await res.json();
+      if (res.ok) setIdeas(data.ideas ?? []);
+    } catch {
+      /* inbox is best-effort */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIdeas();
+  }, [loadIdeas]);
+
+  async function brainstorm() {
+    if (!ideaTopic.trim()) return;
+    setIdeasLoading(true);
+    setIdeasError(null);
+    try {
+      const res = await fetch("/api/ideas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: ideaTopic,
+          count: Number(ideaCount),
+          platform,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIdeasError(data.error + (data.hint ? ` — ${data.hint}` : ""));
+        return;
+      }
+      await loadIdeas();
+    } catch (err) {
+      setIdeasError(String(err));
+    } finally {
+      setIdeasLoading(false);
+    }
+  }
+
+  async function ideaToDraft(id: string) {
+    setDraftingId(id);
+    try {
+      const res = await fetch(`/api/ideas/${id}/draft`, { method: "POST" });
+      if (res.ok) await loadIdeas();
+    } finally {
+      setDraftingId(null);
+    }
+  }
+
+  async function dismissIdea(id: string) {
+    await fetch(`/api/ideas/${id}`, { method: "DELETE" });
+    setIdeas((prev) => prev.filter((i) => i.id !== id));
+  }
 
   async function fillWeek() {
     if (!weekTopic.trim()) return;
@@ -375,6 +446,120 @@ export default function AiStudioPage() {
                 ))}
               </ul>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Ideas inbox */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lightbulb className="h-5 w-5 text-amber-400" />
+            Ideas inbox
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Brainstorm a batch of content ideas from one topic. They wait here
+            until you turn them into drafts — no pressure, no blank page.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-[1fr_120px_auto]">
+            <Input
+              placeholder='e.g. "offline AI tools for creators"'
+              value={ideaTopic}
+              onChange={(e) => setIdeaTopic(e.target.value)}
+            />
+            <Select value={ideaCount} onValueChange={(v) => setIdeaCount(v ?? "5")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["3", "5", "8", "10"].map((n) => (
+                  <SelectItem key={n} value={n}>
+                    {n} ideas
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={brainstorm}
+              disabled={ideasLoading || !ideaTopic.trim()}
+              variant="secondary"
+              className="bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+            >
+              {ideasLoading ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Brainstorming…
+                </>
+              ) : (
+                <>
+                  <Lightbulb className="mr-2 h-4 w-4" />
+                  Brainstorm
+                </>
+              )}
+            </Button>
+          </div>
+
+          {ideasError && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Brainstorm failed</p>
+                <p className="mt-1 text-red-300/80">{ideasError}</p>
+              </div>
+            </div>
+          )}
+
+          {ideas.length > 0 && (
+            <ul className="divide-y divide-border rounded-lg border">
+              {ideas.map((idea) => (
+                <li
+                  key={idea.id}
+                  className={`flex items-center justify-between gap-4 px-4 py-2.5 text-sm ${
+                    idea.usedBy ? "opacity-45" : ""
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate">{idea.text}</span>
+                    <span className="text-xs text-muted-foreground">
+                      from “{idea.topic}”
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <Badge variant="secondary">{idea.platform}</Badge>
+                    {idea.usedBy ? (
+                      <Badge variant="outline" className="text-emerald-400 border-emerald-500/40">
+                        drafted
+                      </Badge>
+                    ) : (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => ideaToDraft(idea.id)}
+                          disabled={draftingId === idea.id}
+                        >
+                          {draftingId === idea.id ? (
+                            <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ArrowRight className="mr-1 h-3.5 w-3.5" />
+                          )}
+                          draft
+                        </Button>
+                        <button
+                          onClick={() => dismissIdea(idea.id)}
+                          className="text-muted-foreground hover:text-red-400"
+                          title="Dismiss idea"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </CardContent>
       </Card>

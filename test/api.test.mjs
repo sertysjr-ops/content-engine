@@ -814,6 +814,83 @@ try {
   const stats7 = await api("/api/stats");
   check("post store restored to 6 after critique probes", stats7.body.total === 6);
 
+  // --- ideas inbox: brainstorm → list → draft → delete ---
+  const ideas0 = await api("/api/ideas");
+  check("GET /api/ideas returns an array", Array.isArray(ideas0.body.ideas));
+
+  const ideasBad = await api("/api/ideas", {
+    method: "POST",
+    body: JSON.stringify({ topic: "" }),
+  });
+  check("POST /api/ideas with empty topic → 400", ideasBad.status === 400);
+
+  const brainstorm = await api("/api/ideas", {
+    method: "POST",
+    body: JSON.stringify({ topic: "offline AI tools for creators", count: 3, platform: "twitter" }),
+  });
+  const newIdeas = brainstorm.body.ideas ?? [];
+  check(
+    "POST /api/ideas brainstorms ideas (live LLM)",
+    brainstorm.status === 201 && newIdeas.length >= 2 &&
+      newIdeas.every((i) => i.text.length >= 12 && i.topic && i.usedBy === null),
+    `status=${brainstorm.status} n=${newIdeas.length}`
+  );
+
+  const ideaCountClamp = await api("/api/ideas", {
+    method: "POST",
+    body: JSON.stringify({ topic: "cli tools", count: 99 }),
+  });
+  check(
+    "count=99 is clamped to ≤10",
+    ideaCountClamp.status === 201 && (ideaCountClamp.body.ideas ?? []).length <= 10,
+    `n=${(ideaCountClamp.body.ideas ?? []).length}`
+  );
+  // clean the clamp batch — we only care about the count
+  for (const i of ideaCountClamp.body.ideas ?? []) {
+    await api(`/api/ideas/${i.id}`, { method: "DELETE" });
+  }
+
+  if (newIdeas.length > 0) {
+    const idea = newIdeas[0];
+    const drafted = await api(`/api/ideas/${idea.id}/draft`, { method: "POST" });
+    check(
+      "POST /api/ideas/[id]/draft creates a draft post",
+      drafted.status === 201 &&
+        drafted.body.post?.status === "draft" &&
+        drafted.body.post?.aiGenerated === true &&
+        drafted.body.idea?.usedBy === drafted.body.post?.id,
+      `status=${drafted.status}`
+    );
+
+    const redraft = await api(`/api/ideas/${idea.id}/draft`, { method: "POST" });
+    check("re-drafting a used idea → 409", redraft.status === 409);
+
+    const missingDraft = await api(`/api/ideas/does-not-exist/draft`, { method: "POST" });
+    check("drafting unknown idea → 404", missingDraft.status === 404);
+
+    // ideas list: used idea sinks below unused ones
+    const ideasAfter = await api("/api/ideas");
+    const list = ideasAfter.body.ideas ?? [];
+    const idx = list.findIndex((i) => i.id === idea.id);
+    const firstUnused = list.findIndex((i) => !i.usedBy);
+    check(
+      "used ideas sort below unused ones",
+      idx === -1 || firstUnused === -1 || idx > firstUnused
+    );
+
+    // cleanup: delete the created post + all brainstormed ideas
+    if (drafted.body.post?.id) {
+      await api(`/api/posts/${drafted.body.post.id}`, { method: "DELETE" });
+    }
+  }
+  for (const i of newIdeas) {
+    await api(`/api/ideas/${i.id}`, { method: "DELETE" });
+  }
+  const del404 = await api(`/api/ideas/does-not-exist`, { method: "DELETE" });
+  check("DELETE unknown idea → 404", del404.status === 404);
+  const stats8 = await api("/api/stats");
+  check("post store restored to 6 after ideas probes", stats8.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
