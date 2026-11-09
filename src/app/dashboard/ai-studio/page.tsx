@@ -60,6 +60,8 @@ export default function AiStudioPage() {
   const [ideasLoading, setIdeasLoading] = useState(false);
   const [ideasError, setIdeasError] = useState<string | null>(null);
   const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [planningId, setPlanningId] = useState<string | null>(null);
+  const [planFlash, setPlanFlash] = useState<string | null>(null);
 
   const loadIdeas = useCallback(async () => {
     try {
@@ -115,6 +117,32 @@ export default function AiStudioPage() {
   async function dismissIdea(id: string) {
     await fetch(`/api/ideas/${id}`, { method: "DELETE" });
     setIdeas((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  async function ideaToWeek(id: string) {
+    setPlanningId(id);
+    setPlanFlash(null);
+    setIdeasError(null);
+    try {
+      const res = await fetch(`/api/ideas/${id}/week`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tone: weekTone }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIdeasError(data.error + (data.hint ? ` — ${data.hint}` : ""));
+        return;
+      }
+      setPlanFlash(
+        `📅 ${data.posts.length} posts scheduled across ${data.days} days from that idea — see the calendar`
+      );
+      await loadIdeas();
+    } catch (err) {
+      setIdeasError(String(err));
+    } finally {
+      setPlanningId(null);
+    }
   }
 
   async function fillWeek() {
@@ -511,6 +539,10 @@ export default function AiStudioPage() {
             </div>
           )}
 
+          {planFlash && (
+            <p className="mb-3 text-sm text-emerald-400">{planFlash}</p>
+          )}
+
           {ideas.length > 0 && (
             <ul className="divide-y divide-border rounded-lg border">
               {ideas.map((idea) => (
@@ -546,6 +578,20 @@ export default function AiStudioPage() {
                             <ArrowRight className="mr-1 h-3.5 w-3.5" />
                           )}
                           draft
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => ideaToWeek(idea.id)}
+                          disabled={planningId === idea.id}
+                          title={`Generate a full week (${weekTone} tone) from this idea`}
+                        >
+                          {planningId === idea.id ? (
+                            <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <CalendarPlus className="mr-1 h-3.5 w-3.5" />
+                          )}
+                          plan week
                         </Button>
                         <button
                           onClick={() => dismissIdea(idea.id)}

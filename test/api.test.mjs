@@ -868,6 +868,44 @@ try {
     const missingDraft = await api(`/api/ideas/does-not-exist/draft`, { method: "POST" });
     check("drafting unknown idea → 404", missingDraft.status === 404);
 
+    // --- idea → week bridge: plan a full scheduled pack from one idea ---
+    const weekIdeaRes = await api("/api/ideas", {
+      method: "POST",
+      body: JSON.stringify({ topic: "morning routines for developers", count: 2 }),
+    });
+    const weekIdeas = weekIdeaRes.body.ideas ?? [];
+    const weekIdea = weekIdeas[0];
+    if (weekIdea) {
+      const missingWeek = await api(`/api/ideas/does-not-exist/week`, { method: "POST" });
+      check("planning week from unknown idea → 404", missingWeek.status === 404);
+
+      const planned = await api(`/api/ideas/${weekIdea.id}/week`, {
+        method: "POST",
+        body: JSON.stringify({ tone: "casual" }),
+      });
+      const pack = planned.body.posts ?? [];
+      check(
+        "POST /api/ideas/[id]/week schedules a pack (live LLM)",
+        planned.status === 201 &&
+          pack.length >= 3 &&
+          pack.every((p) => p.status === "scheduled" && p.scheduledAt && p.aiGenerated) &&
+          planned.body.idea?.usedBy === pack[0]?.id &&
+          typeof planned.body.days === "number",
+        `status=${planned.status} n=${pack.length}`
+      );
+
+      const replan = await api(`/api/ideas/${weekIdea.id}/week`, { method: "POST" });
+      check("re-planning a used idea → 409", replan.status === 409);
+
+      // cleanup: pack posts, then every idea this probe brainstormed
+      for (const p of pack) {
+        await api(`/api/posts/${p.id}`, { method: "DELETE" });
+      }
+    }
+    for (const i of weekIdeas) {
+      await api(`/api/ideas/${i.id}`, { method: "DELETE" });
+    }
+
     // ideas list: used idea sinks below unused ones
     const ideasAfter = await api("/api/ideas");
     const list = ideasAfter.body.ideas ?? [];
