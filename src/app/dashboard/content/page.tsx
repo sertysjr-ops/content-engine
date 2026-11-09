@@ -25,6 +25,7 @@ import {
   Recycle,
   BarChart3,
   Sparkles,
+  ListOrdered,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
@@ -62,6 +63,9 @@ type Critique = {
   hookRewrite: string;
 };
 
+type Tweet = { text: string; chars: number };
+type ThreadPreview = { tweets: Tweet[]; fallback: boolean };
+
 function scoreColor(score: number): string {
   if (score >= 8) return "text-emerald-500 border-emerald-500/40";
   if (score >= 5) return "text-amber-500 border-amber-500/40";
@@ -88,6 +92,11 @@ export default function ContentPage() {
   const [critiquing, setCritiquing] = useState<string | null>(null);
   const [applyingHook, setApplyingHook] = useState<string | null>(null);
   const [hookFlash, setHookFlash] = useState<Record<string, string>>({});
+  const [threadFor, setThreadFor] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Record<string, ThreadPreview>>({});
+  const [threading, setThreading] = useState<string | null>(null);
+  const [threadSaving, setThreadSaving] = useState<string | null>(null);
+  const [threadFlash, setThreadFlash] = useState<Record<string, string>>({});
   const [reviewing, setReviewing] = useState(false);
   const [reviewQueue, setReviewQueue] = useState<
     | {
@@ -184,6 +193,71 @@ export default function ContentPage() {
       }
     } finally {
       setRecycling(null);
+    }
+  }
+
+  async function threadifyPost(post: Post) {
+    if (threadFor === post.id) {
+      setThreadFor(null); // toggle closed
+      return;
+    }
+    setThreadFor(post.id);
+    if (threads[post.id]) return; // cached for this session
+    setThreading(post.id);
+    try {
+      const res = await fetch("/api/threadify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postId: post.id, count: 5 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setThreads((t) => ({
+          ...t,
+          [post.id]: { tweets: data.tweets ?? [], fallback: !!data.fallback },
+        }));
+      }
+    } finally {
+      setThreading(null);
+    }
+  }
+
+  async function saveThread(post: Post, schedule: boolean) {
+    const preview = threads[post.id];
+    if (!preview || preview.tweets.length === 0) return;
+    setThreadSaving(post.id);
+    try {
+      const res = await fetch("/api/threadify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          postId: post.id,
+          count: preview.tweets.length,
+          save: true,
+          schedule,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const n = data.saved?.posts?.length ?? preview.tweets.length;
+        setThreadFlash((f) => ({
+          ...f,
+          [post.id]: schedule
+            ? `🧵 ${n} tweets scheduled`
+            : `🧵 ${n} tweet drafts saved`,
+        }));
+        setTimeout(() => {
+          setThreadFlash((f) => {
+            const next = { ...f };
+            delete next[post.id];
+            return next;
+          });
+        }, 4000);
+        setThreadFor(null);
+        await load();
+      }
+    } finally {
+      setThreadSaving(null);
     }
   }
 
@@ -579,6 +653,11 @@ export default function ContentPage() {
                       +{recycleFlash[post.id]} variants drafted
                     </span>
                   )}
+                  {threadFlash[post.id] && (
+                    <span className="text-xs text-sky-500">
+                      {threadFlash[post.id]}
+                    </span>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -590,6 +669,19 @@ export default function ContentPage() {
                       <RefreshCw className="h-4 w-4 animate-spin text-fuchsia-500" />
                     ) : (
                       <Sparkles className="h-4 w-4 text-muted-foreground hover:text-fuchsia-500" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => threadifyPost(post)}
+                    disabled={threading === post.id}
+                    title="Thread mode: split into a numbered X thread"
+                  >
+                    {threading === post.id ? (
+                      <RefreshCw className="h-4 w-4 animate-spin text-sky-500" />
+                    ) : (
+                      <ListOrdered className="h-4 w-4 text-muted-foreground hover:text-sky-500" />
                     )}
                   </Button>
                   <Button
@@ -702,6 +794,85 @@ export default function ContentPage() {
                         </Button>
                       </div>
                     )}
+                  </div>
+                )}
+              </CardContent>
+            )}
+            {threadFor === post.id && (
+              <CardContent className="border-t pt-4">
+                {threading === post.id && (
+                  <p className="text-sm text-muted-foreground">
+                    🧵 Splitting into a thread with the local model…
+                  </p>
+                )}
+                {threads[post.id] && (
+                  <div className="space-y-3">
+                    {threads[post.id].fallback && (
+                      <p className="text-xs text-amber-500">
+                        Model output wasn't thread-shaped — used the
+                        zero-LLM splitter instead.
+                      </p>
+                    )}
+                    <div className="space-y-2">
+                      {threads[post.id].tweets.map((t, i) => (
+                        <div
+                          key={i}
+                          className="rounded-lg border p-3 text-sm"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="whitespace-pre-wrap">
+                              <span className="mr-1 font-semibold text-sky-500">
+                                {i + 1}/
+                              </span>
+                              {t.text}
+                            </p>
+                            <span
+                              className={`shrink-0 text-xs ${
+                                t.chars > 280
+                                  ? "font-semibold text-red-500"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              {t.chars}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={threadSaving === post.id}
+                        onClick={() => saveThread(post, false)}
+                        title="Save each tweet as a draft (platform: thread)"
+                      >
+                        {threadSaving === post.id ? (
+                          <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Check className="mr-1 h-3 w-3" />
+                        )}
+                        Save as drafts
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={threadSaving === post.id}
+                        onClick={() => saveThread(post, true)}
+                        className="bg-gradient-to-r from-sky-500 to-violet-600 hover:from-sky-600 hover:to-violet-700"
+                        title="Schedule the tweets 2 min apart, starting in 1h — the publish queue drips them out in order"
+                      >
+                        {threadSaving === post.id ? (
+                          <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Calendar className="mr-1 h-3 w-3" />
+                        )}
+                        Schedule thread
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {threads[post.id].tweets.length} tweets — staggered
+                        2 min apart via the auto-publish queue.
+                      </span>
+                    </div>
                   </div>
                 )}
               </CardContent>

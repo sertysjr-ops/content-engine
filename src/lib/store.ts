@@ -25,6 +25,8 @@ export type Post = {
   engagement: string | null; // e.g. "1.2k" — manual until real analytics
   aiGenerated: boolean;
   recycledFrom?: string | null; // source post id when minted via /api/recycle
+  threadId?: string | null; // shared id grouping posts minted via /api/threadify
+  threadIndex?: number | null; // 1-based position inside the thread
   createdAt: string;
   updatedAt: string;
 };
@@ -165,6 +167,8 @@ export function createPost(input: PostInput): Post {
     engagement: input.engagement ?? null,
     aiGenerated: input.aiGenerated ?? false,
     recycledFrom: input.recycledFrom ?? null,
+    threadId: input.threadId ?? null,
+    threadIndex: input.threadIndex ?? null,
     createdAt: now,
     updatedAt: now,
   };

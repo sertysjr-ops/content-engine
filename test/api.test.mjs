@@ -929,6 +929,99 @@ try {
   const stats8 = await api("/api/stats");
   check("post store restored to 6 after ideas probes", stats8.body.total === 6);
 
+  // --- thread mode: split content into a numbered X thread ---
+  const LONG_FORM =
+    "Most creators fail because they treat content like a lottery ticket instead of a system. " +
+    "They post when they feel inspired, wonder why nothing compounds, and quit after six weeks. " +
+    "The accounts that grow do three boring things every single week: they batch ideas on Sunday, " +
+    "they recycle what already worked into new angles, and they schedule everything so consistency " +
+    "never depends on motivation. None of this requires talent. It requires a calendar and the " +
+    "discipline to ship when the post is good enough, not perfect. Your twentieth systematized post " +
+    "will beat your first inspired one almost every time, because the algorithm rewards cadence " +
+    "and your audience rewards reliability. Build the machine first, then let creativity ride on it.";
+
+  const adhocThread = await api("/api/threadify", {
+    method: "POST",
+    body: JSON.stringify({ content: LONG_FORM, title: "Content systems", count: 5 }),
+  });
+  const adhocTweets = adhocThread.body.tweets ?? [];
+  check(
+    "POST /api/threadify splits ad-hoc content (live LLM)",
+    adhocThread.status === 200 &&
+      adhocTweets.length >= 2 &&
+      adhocTweets.length <= 6 &&
+      adhocTweets.every((t) => typeof t.text === "string" && t.text.length > 0) &&
+      adhocTweets.every((t) => t.chars === t.text.length && t.chars <= 280) &&
+      typeof adhocThread.body.fallback === "boolean",
+    `status=${adhocThread.status} n=${adhocTweets.length}`
+  );
+
+  const noBody = await api("/api/threadify", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  check("threadify with neither postId nor content → 400", noBody.status === 400);
+
+  const missingPost = await api("/api/threadify", {
+    method: "POST",
+    body: JSON.stringify({ postId: "does-not-exist" }),
+  });
+  check("threadify unknown postId → 404", missingPost.status === 404);
+
+  // save flow: real post → scheduled thread, staggered and linked
+  const src = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Threadify probe",
+      content: LONG_FORM,
+      platform: "blog",
+      status: "draft",
+    }),
+  });
+  const srcId = src.body.post?.id;
+  if (srcId) {
+    const scheduled = await api("/api/threadify", {
+      method: "POST",
+      body: JSON.stringify({ postId: srcId, count: 4, save: true, schedule: true }),
+    });
+    const saved = scheduled.body.saved?.posts ?? [];
+    const threadIds = new Set(saved.map((p) => p.threadId));
+    check(
+      "threadify save+schedule mints a linked, staggered thread",
+      scheduled.status === 201 &&
+        saved.length >= 2 &&
+        saved.every((p) => p.platform === "thread" && p.status === "scheduled") &&
+        saved.every((p) => p.recycledFrom === srcId) &&
+        threadIds.size === 1 &&
+        saved.map((p) => p.threadIndex).join(",") ===
+          saved.map((_, i) => i + 1).join(",") &&
+        saved.every(
+          (p, i) => i === 0 || p.scheduledAt > saved[i - 1].scheduledAt
+        ) &&
+        scheduled.body.source?.id === srcId,
+      `status=${scheduled.status} n=${saved.length}`
+    );
+
+    // the source post itself is untouched
+    const listAfter = await api("/api/posts");
+    const srcAfter = (listAfter.body.posts ?? []).find((p) => p.id === srcId);
+    check(
+      "threadify leaves the source post unmodified",
+      srcAfter?.content === LONG_FORM && srcAfter?.status === "draft"
+    );
+
+    // cleanup: the thread tweets, then the source
+    for (const p of saved) {
+      await api(`/api/posts/${p.id}`, { method: "DELETE" });
+    }
+    await api(`/api/posts/${srcId}`, { method: "DELETE" });
+  } else {
+    check("threadify save probe setup (create source post)", false);
+  }
+
+  const stats9 = await api("/api/stats");
+  check("post store restored to 6 after threadify probes", stats9.body.total === 6);
+
   console.log(`\n${passed} checks passed`);
 } finally {
   server.kill("SIGTERM");
