@@ -18,7 +18,9 @@ const MODEL = process.env.OLLAMA_MODEL ?? "qwen3.5:4b";
  *   Preview:  { postId } | { content, title? }  (+ count?: 3-10, default 5)
  *     → 200 { tweets: [{text, chars}], fallback, source, model }
  *   Save:     + save: true, schedule?: boolean (default false → drafts),
- *             startAt?: ISO (default now+1h), gapMinutes?: number (default 2)
+ *             startAt?: ISO (default now+1h), gapMinutes?: number (default 2),
+ *             tweets?: string[] (2-10) — client-EDITED tweets: skips the LLM
+ *             entirely and saves exactly what's given.
  *     → 201 { ..., saved: { threadId, posts: Post[] } }
  *
  * The LLM does the splitting; parseTweets() handles format drift and
@@ -71,6 +73,32 @@ export async function POST(req: NextRequest) {
     const schedule = body.schedule === true;
     const gapMinutes = Math.min(60, Math.max(1, Number(body.gapMinutes) || 2));
 
+    // Client-EDITED tweets: skip the LLM entirely, save exactly what's given.
+    // Only valid on save — a "preview" of client text would be a no-op.
+    let editedTweets: Tweet[] | null = null;
+    if (Array.isArray(body.tweets)) {
+      const cleaned: string[] = body.tweets
+        .filter((t: unknown) => typeof t === "string")
+        .map((t: string) => t.trim())
+        // Strip a leading "1/ " (etc.) the user may have typed in — the
+        // save step adds enumeration itself, so it would double up.
+        .map((t: string) => t.replace(/^\d+\s*[\/.)\]:-]\s*/, "").trim())
+        .filter((t: string) => t.length > 0);
+      if (cleaned.length < 2 || cleaned.length > 10) {
+        return NextResponse.json(
+          { error: "tweets must contain 2-10 non-empty strings" },
+          { status: 400 }
+        );
+      }
+      if (!save) {
+        return NextResponse.json(
+          { error: "tweets is only valid together with save: true" },
+          { status: 400 }
+        );
+      }
+      editedTweets = cleaned.map((text) => ({ text, chars: text.length }));
+    }
+
     let title: string;
     let sourceContent: string;
     let source: { id: string | null; title: string };
@@ -99,13 +127,18 @@ export async function POST(req: NextRequest) {
 
     let tweets: Tweet[];
     let fallback = false;
-    try {
-      ({ tweets, fallback } = await generateThread(title, sourceContent, count));
-    } catch (e) {
-      // Ollama down entirely → zero-LLM fallback still ships a thread.
-      console.error("threadify: LLM failed, using hardSplit:", e);
-      tweets = hardSplit(sourceContent).slice(0, count);
-      fallback = true;
+    const edited = editedTweets !== null;
+    if (editedTweets) {
+      tweets = editedTweets; // client-edited: LLM skipped entirely
+    } else {
+      try {
+        ({ tweets, fallback } = await generateThread(title, sourceContent, count));
+      } catch (e) {
+        // Ollama down entirely → zero-LLM fallback still ships a thread.
+        console.error("threadify: LLM failed, using hardSplit:", e);
+        tweets = hardSplit(sourceContent).slice(0, count);
+        fallback = true;
+      }
     }
     if (tweets.length === 0) {
       return NextResponse.json(
@@ -118,8 +151,9 @@ export async function POST(req: NextRequest) {
       tweets,
       count: tweets.length,
       fallback,
+      edited,
       source,
-      model: fallback ? null : MODEL,
+      model: fallback || edited ? null : MODEL,
     };
 
     if (save) {
@@ -144,7 +178,7 @@ export async function POST(req: NextRequest) {
             ? new Date(start.getTime() + i * gapMinutes * 60_000).toISOString()
             : null,
           engagement: null,
-          aiGenerated: !fallback,
+          aiGenerated: !fallback && !edited,
           recycledFrom: source.id,
           threadId,
           threadIndex: i + 1,

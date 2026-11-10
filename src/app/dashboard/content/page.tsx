@@ -222,6 +222,17 @@ export default function ContentPage() {
     }
   }
 
+  function editTweet(postId: string, index: number, text: string) {
+    setThreads((t) => {
+      const preview = t[postId];
+      if (!preview) return t;
+      const tweets = preview.tweets.map((tw, i) =>
+        i === index ? { text, chars: text.length } : tw
+      );
+      return { ...t, [postId]: { ...preview, tweets } };
+    });
+  }
+
   async function saveThread(post: Post, schedule: boolean) {
     const preview = threads[post.id];
     if (!preview || preview.tweets.length === 0) return;
@@ -232,7 +243,9 @@ export default function ContentPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           postId: post.id,
-          count: preview.tweets.length,
+          // Save exactly what the preview shows (incl. any edits) — the
+          // server skips the LLM, so saved tweets can't drift from preview.
+          tweets: preview.tweets.map((t) => t.text),
           save: true,
           schedule,
         }),
@@ -819,15 +832,21 @@ export default function ContentPage() {
                           key={i}
                           className="rounded-lg border p-3 text-sm"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <p className="whitespace-pre-wrap">
-                              <span className="mr-1 font-semibold text-sky-500">
-                                {i + 1}/
-                              </span>
-                              {t.text}
-                            </p>
+                          <div className="flex items-start gap-3">
+                            <span className="mt-2 shrink-0 font-semibold text-sky-500">
+                              {i + 1}/
+                            </span>
+                            <Textarea
+                              value={t.text}
+                              onChange={(e) =>
+                                editTweet(post.id, i, e.target.value)
+                              }
+                              rows={Math.min(6, Math.max(2, Math.ceil(t.chars / 60)))}
+                              className="min-h-0 flex-1 resize-y border-0 bg-transparent p-1 shadow-none focus-visible:ring-1"
+                              title="Edit this tweet — your version is what gets saved"
+                            />
                             <span
-                              className={`shrink-0 text-xs ${
+                              className={`mt-2 shrink-0 text-xs ${
                                 t.chars > 280
                                   ? "font-semibold text-red-500"
                                   : "text-muted-foreground"
@@ -869,8 +888,9 @@ export default function ContentPage() {
                         Schedule thread
                       </Button>
                       <span className="text-xs text-muted-foreground">
-                        {threads[post.id].tweets.length} tweets — staggered
-                        2 min apart via the auto-publish queue.
+                        {threads[post.id].tweets.length} tweets — edit any
+                        box above; your version is exactly what gets saved.
+                        Scheduled threads stagger 2 min apart.
                       </span>
                     </div>
                   </div>

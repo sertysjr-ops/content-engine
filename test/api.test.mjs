@@ -1019,6 +1019,67 @@ try {
     check("threadify save probe setup (create source post)", false);
   }
 
+  // --- threadify edited save: client tweets skip the LLM, saved verbatim ---
+  const editSrc = await api("/api/posts", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Edited thread probe",
+      content: "source content the llm would normally split",
+      platform: "blog",
+      status: "draft",
+    }),
+  });
+  const editSrcId = editSrc.body.post?.id;
+  if (editSrcId) {
+    const EDITED = [
+      "1/ I rewrote this opener by hand",
+      "2/ this middle tweet was edited too   ",
+      "3/ and the closer is all mine",
+    ];
+    const editedSave = await api("/api/threadify", {
+      method: "POST",
+      body: JSON.stringify({ postId: editSrcId, tweets: EDITED, save: true }),
+    });
+    const editSaved = editedSave.body.saved?.posts ?? [];
+    check(
+      "edited tweets save verbatim, enumeration de-duped, LLM skipped",
+      editedSave.status === 201 &&
+        editedSave.body.edited === true &&
+        editedSave.body.model === null &&
+        editSaved.length === 3 &&
+        // "1/ " the user typed is stripped, server adds its own exactly once
+        editSaved[0].content === "1/ I rewrote this opener by hand" &&
+        editSaved[1].content === "2/ this middle tweet was edited too" &&
+        editSaved[2].content === "3/ and the closer is all mine" &&
+        editSaved.every((p) => p.platform === "thread" && p.status === "draft") &&
+        editSaved.every((p) => p.aiGenerated === false) &&
+        new Set(editSaved.map((p) => p.threadId)).size === 1 &&
+        editSaved.map((p) => p.threadIndex).join(",") === "1,2,3",
+      `status=${editedSave.status} first=${editSaved[0]?.content?.slice(0, 60)}`
+    );
+
+    const tooFew = await api("/api/threadify", {
+      method: "POST",
+      body: JSON.stringify({ postId: editSrcId, tweets: ["only one"], save: true }),
+    });
+    check("edited tweets with <2 non-empty → 400", tooFew.status === 400);
+
+    const noSave = await api("/api/threadify", {
+      method: "POST",
+      body: JSON.stringify({ postId: editSrcId, tweets: ["a", "b"] }),
+    });
+    check("tweets without save:true → 400", noSave.status === 400);
+
+    for (const p of editSaved) {
+      await api(`/api/posts/${p.id}`, { method: "DELETE" });
+    }
+    await api(`/api/posts/${editSrcId}`, { method: "DELETE" });
+  } else {
+    check("edited save probe setup (create source post)", false);
+    check("edited tweets with <2 non-empty → 400", false);
+    check("tweets without save:true → 400", false);
+  }
+
   const stats9 = await api("/api/stats");
   check("post store restored to 6 after threadify probes", stats9.body.total === 6);
 
