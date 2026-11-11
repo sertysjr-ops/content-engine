@@ -1010,6 +1010,21 @@ try {
       srcAfter?.content === LONG_FORM && srcAfter?.status === "draft"
     );
 
+    // Calendar thread grouping reads these straight off the post list
+    const listed = (listAfter.body.posts ?? []).filter(
+      (p) => p.threadId === saved[0]?.threadId
+    );
+    check(
+      "GET /api/posts exposes threadId/threadIndex lineage (Calendar contract)",
+      listed.length === saved.length &&
+        listed.every(
+          (p) =>
+            typeof p.threadId === "string" &&
+            Number.isInteger(p.threadIndex) &&
+            p.threadIndex >= 1
+        )
+    );
+
     // cleanup: the thread tweets, then the source
     for (const p of saved) {
       await api(`/api/posts/${p.id}`, { method: "DELETE" });

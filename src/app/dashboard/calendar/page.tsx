@@ -25,7 +25,44 @@ type ScheduledPost = {
   platform: string;
   date: Date;
   status: "scheduled" | "draft" | "published";
+  threadId: string | null;
+  threadIndex: number | null;
 };
+
+/** A day cell renders standalone posts and same-day thread groups. */
+type DayItem =
+  | { kind: "single"; post: ScheduledPost }
+  | { kind: "thread"; threadId: string; tweets: ScheduledPost[] };
+
+function groupDayPosts(dayPosts: ScheduledPost[]): DayItem[] {
+  const threads = new Map<string, ScheduledPost[]>();
+  const items: DayItem[] = [];
+  for (const post of dayPosts) {
+    if (!post.threadId) {
+      items.push({ kind: "single", post });
+      continue;
+    }
+    const group = threads.get(post.threadId);
+    if (group) group.push(post);
+    else threads.set(post.threadId, [post]);
+  }
+  for (const [threadId, tweets] of threads) {
+    tweets.sort(
+      (a, b) => (a.threadIndex ?? 0) - (b.threadIndex ?? 0)
+    );
+    if (tweets.length === 1) {
+      // rest of the thread lives on other days — single chip, 🧵 badge
+      items.push({ kind: "single", post: tweets[0] });
+    } else {
+      items.push({ kind: "thread", threadId, tweets });
+    }
+  }
+  return items.sort(
+    (a, b) =>
+      (a.kind === "single" ? a.post.date : a.tweets[0].date).getTime() -
+      (b.kind === "single" ? b.post.date : b.tweets[0].date).getTime()
+  );
+}
 
 const statusVariant = {
   published: "default",
@@ -48,12 +85,14 @@ export default function CalendarPage() {
         setPosts(
           (data.posts ?? [])
             .filter((p: { scheduledAt: string | null }) => p.scheduledAt)
-            .map((p: { id: string; title: string; platform: string; scheduledAt: string; status: ScheduledPost["status"] }) => ({
+            .map((p: { id: string; title: string; platform: string; scheduledAt: string; status: ScheduledPost["status"]; threadId?: string | null; threadIndex?: number | null }) => ({
               id: p.id,
               title: p.title,
               platform: p.platform,
               date: parseISO(p.scheduledAt),
               status: p.status,
+              threadId: p.threadId ?? null,
+              threadIndex: p.threadIndex ?? null,
             }))
         );
       } finally {
@@ -141,24 +180,64 @@ export default function CalendarPage() {
                     </span>
                   </div>
                   <div className="mt-1 space-y-1">
-                    {dayPosts.map((post) => (
-                      <div
-                        key={post.id}
-                        className="cursor-pointer rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-600 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
-                        title={`${post.title} — ${post.platform} ${format(post.date, "HH:mm")}`}
-                      >
-                        <div className="truncate">{post.title}</div>
-                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>{format(post.date, "HH:mm")}</span>
-                          <Badge
-                            variant={statusVariant[post.status]}
-                            className="h-3.5 px-1 text-[9px]"
-                          >
-                            {post.status}
-                          </Badge>
+                    {groupDayPosts(dayPosts).map((item) =>
+                      item.kind === "thread" ? (
+                        <div
+                          key={item.threadId}
+                          className="rounded-md border-l-2 border-violet-500 bg-violet-500/5 py-1 pl-1.5 pr-1"
+                          title={`Thread — ${item.tweets.length} tweets`}
+                        >
+                          <div className="px-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-500">
+                            🧵 thread · {item.tweets.length}
+                          </div>
+                          {item.tweets.map((tweet) => (
+                            <div
+                              key={tweet.id}
+                              className="mt-0.5 cursor-pointer rounded-md bg-violet-500/10 px-1.5 py-1 text-xs font-medium text-violet-600 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
+                              title={`${tweet.title} — ${format(tweet.date, "HH:mm")}`}
+                            >
+                              <div className="flex items-center gap-1">
+                                <span className="shrink-0 rounded bg-violet-500/20 px-1 text-[9px] font-bold">
+                                  {tweet.threadIndex}
+                                </span>
+                                <span className="truncate">{tweet.title}</span>
+                              </div>
+                              <div className="flex items-center justify-between pl-5 text-[10px] text-muted-foreground">
+                                <span>{format(tweet.date, "HH:mm")}</span>
+                                <Badge
+                                  variant={statusVariant[tweet.status]}
+                                  className="h-3.5 px-1 text-[9px]"
+                                >
+                                  {tweet.status}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      </div>
-                    ))}
+                      ) : (
+                        <div
+                          key={item.post.id}
+                          className="cursor-pointer rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-600 transition-colors hover:bg-violet-500/20 dark:text-violet-400"
+                          title={`${item.post.title} — ${item.post.platform} ${format(item.post.date, "HH:mm")}`}
+                        >
+                          <div className="truncate">
+                            {item.post.threadId && (
+                              <span title="Part of a thread scheduled across days">🧵 </span>
+                            )}
+                            {item.post.title}
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span>{format(item.post.date, "HH:mm")}</span>
+                            <Badge
+                              variant={statusVariant[item.post.status]}
+                              className="h-3.5 px-1 text-[9px]"
+                            >
+                              {item.post.status}
+                            </Badge>
+                          </div>
+                        </div>
+                      )
+                    )}
                   </div>
                 </div>
               );
